@@ -58,15 +58,15 @@ def get_mlb_data():
 stats_df = get_mlb_data()
 
 if stats_df.empty:
-    st.warning("⚠️ Live Stats Blocked or Unavailable. Using Manual Entry Mode.")
-    mlb_teams = ["ATL", "PHI", "NYM", "MIA", "WSH", "CHC", "MIL", "STL", "CIN", "PIT", "LAD", "SF", "SD", "ARI", "COL", "NYY", "BAL", "TOR", "TB", "BOS", "CLE", "MIN", "DET", "KC", "CWS", "HOU", "SEA", "TEX", "LAA", "OAK"]
+    st.warning("⚠️ Live Stats Connection Blocked. Manual Entry Mode Enabled.")
+    mlb_teams = sorted(["ATL", "PHI", "NYM", "MIA", "WSH", "CHC", "MIL", "STL", "CIN", "PIT", "LAD", "SF", "SD", "ARI", "COL", "NYY", "BAL", "TOR", "TB", "BOS", "CLE", "MIN", "DET", "KC", "CWS", "HOU", "SEA", "TEX", "LAA", "OAK"])
 else:
     st.success("Live MLB Stats Loaded Successfully")
     mlb_teams = sorted(stats_df['Team'].tolist())
 
 # 2. MATCHUP INPUT
 st.markdown("### Today's Matchups")
-num_games = st.number_input("Number of Games to Analyze", min_value=1, max_value=15, value=3)
+num_games = st.number_input("Number of Games to Analyze", min_value=1, max_value=16, value=5)
 
 input_data = []
 
@@ -80,10 +80,10 @@ for i in range(num_games):
         
         if stats_df.empty:
             sc1, sc2, sc3, sc4 = st.columns(4)
-            a_rpg = sc1.number_input(f"{a_team} Runs/GM", value=4.5, key=f"a_r_{i}")
-            a_ra = sc2.number_input(f"{a_team} RA/GM", value=4.5, key=f"a_ra_{i}")
-            h_rpg = sc3.number_input(f"{h_team} Runs/GM", value=4.5, key=f"h_r_{i}")
-            h_ra = sc4.number_input(f"{h_team} RA/GM", value=4.5, key=f"h_ra_{i}")
+            a_rpg = sc1.number_input(f"{a_team} R/G", value=4.5, format="%.2f", key=f"a_r_{i}")
+            a_ra = sc2.number_input(f"{a_team} RA/G", value=4.5, format="%.2f", key=f"a_ra_{i}")
+            h_rpg = sc3.number_input(f"{h_team} R/G", value=4.5, format="%.2f", key=f"h_r_{i}")
+            h_ra = sc4.number_input(f"{h_team} RA/G", value=4.5, format="%.2f", key=f"h_ra_{i}")
         else:
             a_rpg = stats_df[stats_df['Team'] == a_team]['Runs/GM'].values[0]
             a_ra = stats_df[stats_df['Team'] == a_team]['RA/GM'].values[0]
@@ -118,4 +118,4 @@ if input_data:
     styled_df = res_df.style.map(highlight_ev, subset=['Away EV', 'Home EV'])
     st.dataframe(styled_df, use_container_width=True)
 
-st.info("Strategy: Focus on EV > 5% for professional edges.")
+st.info("Strategy: Dark Green indicates EV > 10%, Light Green indicates EV > 5%.")
