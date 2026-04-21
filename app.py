@@ -31,12 +31,9 @@ def odds_to_prob(american_odds):
 
 def highlight_ev(val):
     if isinstance(val, (int, float)):
-        if val > 10:
-            return 'background-color: #00FF00; color: black'
-        if val > 5:
-            return 'background-color: #90EE90; color: black'
-        if val < 0:
-            return 'background-color: #FFCCCB; color: black'
+        if val > 10: return 'background-color: #00FF00; color: black'
+        if val > 5: return 'background-color: #90EE90; color: black'
+        if val < 0: return 'background-color: #FFCCCB; color: black'
     return ''
 
 # --- APP UI ---
@@ -58,52 +55,48 @@ def get_mlb_data():
 stats_df = get_mlb_data()
 
 if stats_df.empty:
-    st.warning("⚠️ Live Stats Connection Blocked. Manual Entry Mode Enabled.")
-    mlb_teams = sorted(["ATL", "PHI", "NYM", "MIA", "WSH", "CHC", "MIL", "STL", "CIN", "PIT", "LAD", "SF", "SD", "ARI", "COL", "NYY", "BAL", "TOR", "TB", "BOS", "CLE", "MIN", "DET", "KC", "CWS", "HOU", "SEA", "TEX", "LAA", "OAK"])
+    st.warning("⚠️ Live Stats Blocked. Manual Entry Mode Enabled.")
+    mlb_teams = sorted(["ARI","ATL","BAL","BOS","CHC","CWS","CIN","CLE","COL","DET","HOU","KC","LAA","LAD","MIA","MIL","MIN","NYM","NYY","OAK","PHI","PIT","SD","SF","SEA","STL","TB","TEX","TOR","WSH"])
 else:
     st.success("Live MLB Stats Loaded Successfully")
     mlb_teams = sorted(stats_df['Team'].tolist())
 
 # 2. MATCHUP INPUT
-st.markdown("### Today's Matchups")
 num_games = st.number_input("Number of Games to Analyze", min_value=1, max_value=16, value=5)
-
 input_data = []
 
 for i in range(num_games):
     with st.expander(f"Game {i+1}", expanded=True):
-        c1, c2, c3, c4 = st.columns(4)
-        a_team = c1.selectbox(f"Away Team", mlb_teams, key=f"a_t_{i}")
-        h_team = c2.selectbox(f"Home Team", mlb_teams, key=f"h_t_{i}")
-        a_odds = c3.number_input(f"Away ML Odds", value=-110, key=f"a_o_{i}")
-        h_odds = c4.number_input(f"Home ML Odds", value=100, key=f"h_o_{i}")
+        col1, col2, col3, col4 = st.columns(4)
+        a_team = col1.selectbox("Away Team", mlb_teams, key=f"at_{i}")
+        h_team = col2.selectbox("Home Team", mlb_teams, key=f"ht_{i}")
+        a_odds = col3.number_input("Away ML", value=-110, key=f"ao_{i}")
+        h_odds = col4.number_input("Home ML", value=100, key=f"ho_{i}")
         
+        # Pull stats or use manual inputs
         if stats_df.empty:
             sc1, sc2, sc3, sc4 = st.columns(4)
-            a_rpg = sc1.number_input(f"{a_team} R/G", value=4.5, format="%.2f", key=f"a_r_{i}")
-            a_ra = sc2.number_input(f"{a_team} RA/G", value=4.5, format="%.2f", key=f"a_ra_{i}")
-            h_rpg = sc3.number_input(f"{h_team} R/G", value=4.5, format="%.2f", key=f"h_r_{i}")
-            h_ra = sc4.number_input(f"{h_team} RA/G", value=4.5, format="%.2f", key=f"h_ra_{i}")
+            a_rpg = sc1.number_input(f"{a_team} Runs/GM", value=4.50, step=0.01, key=f"ar_{i}")
+            a_ra = sc2.number_input(f"{a_team} RA/GM", value=4.50, step=0.01, key=f"ara_{i}")
+            h_rpg = sc3.number_input(f"{h_team} Runs/GM", value=4.50, step=0.01, key=f"hr_{i}")
+            h_ra = sc4.number_input(f"{h_team} RA/GM", value=4.50, step=0.01, key=f"hra_{i}")
         else:
             a_rpg = stats_df[stats_df['Team'] == a_team]['Runs/GM'].values[0]
             a_ra = stats_df[stats_df['Team'] == a_team]['RA/GM'].values[0]
             h_rpg = stats_df[stats_df['Team'] == h_team]['Runs/GM'].values[0]
             h_ra = stats_df[stats_df['Team'] == h_team]['RA/GM'].values[0]
         
-        # Calculation Logic
+        # Engine Calculations
         a_lambda = a_rpg * (h_ra / LEAGUE_AVG_RPG)
         h_lambda = h_rpg * (a_ra / LEAGUE_AVG_RPG)
-        
         a_win_p, h_win_p = calculate_win_probabilities(a_lambda, h_lambda)
         v_a_p, v_h_p = odds_to_prob(a_odds), odds_to_prob(h_odds)
         
         input_data.append({
-            "Away": a_team,
-            "Home": h_team,
-            "Proj Away": round(a_lambda, 2),
-            "Proj Home": round(h_lambda, 2),
-            "Model Away %": f"{round(a_win_p * 100, 2)}%",
-            "Vegas Away %": f"{round(v_a_p * 100, 2)}%",
+            "Away": a_team, "Home": h_team,
+            "Proj Away": round(a_lambda, 2), "Proj Home": round(h_lambda, 2),
+            "Model Away %": f"{round(a_win_p * 100, 1)}%",
+            "Vegas Away %": f"{round(v_a_p * 100, 1)}%",
             "Away EV": round(((a_win_p / v_a_p) - 1) * 100, 2),
             "Home EV": round(((h_win_p / v_h_p) - 1) * 100, 2)
         })
@@ -113,9 +106,6 @@ if input_data:
     res_df = pd.DataFrame(input_data)
     st.markdown("---")
     st.markdown("### Value Analysis")
-    
-    # Using .map for Pandas 2.1+ compatibility
-    styled_df = res_df.style.map(highlight_ev, subset=['Away EV', 'Home EV'])
-    st.dataframe(styled_df, use_container_width=True)
+    st.dataframe(res_df.style.map(highlight_ev, subset=['Away EV', 'Home EV']), use_container_width=True)
 
-st.info("Strategy: Dark Green indicates EV > 10%, Light Green indicates EV > 5%.")
+st.info("Strategy: Focus on edges where Model % significantly beats Vegas %.")
