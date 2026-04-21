@@ -2,12 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy.stats import poisson
-from pybaseball import team_pitching, team_batting
+import pybaseball as pyb  # Import the whole library as a shortcut
 import datetime
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="MLB Value Scanner", layout="wide")
-LEAGUE_AVG_RPG = 4.46  # Current 2026 Baseline
+LEAGUE_AVG_RPG = 4.46
 
 # --- POISSON ENGINE ---
 def calculate_win_probabilities(away_lambda, home_lambda, max_runs=15):
