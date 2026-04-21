@@ -99,4 +99,4 @@ for i in range(num_games):
 if input_data:
     res_df = pd.DataFrame(input_data)
     st.markdown("### Value Analysis")
-    st.dataframe(res_df.style.applymap(lambda x: 'background-color: #00FF00; color: black' if x > 10 else ('background-color: #90EE90; color: black' if x > 5 else ''), subset=['Away EV', 'Home EV']))
+   st.dataframe(res_df.style.map(lambda x: 'background-color: #00FF00; color: black' if x > 10 else ('background-color: #90EE90; color: black' if x > 5 else ''), subset=['Away EV', 'Home EV']))
