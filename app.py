@@ -7,7 +7,7 @@ import datetime
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="MLB Value Scanner", layout="wide")
-LEAGUE_AVG_RPG = 4.46  # Current 2026 Baseline
+LEAGUE_AVG_RPG = 4.46
 
 # --- POISSON ENGINE ---
 def calculate_win_probabilities(away_lambda, home_lambda, max_runs=15):
@@ -19,7 +19,6 @@ def calculate_win_probabilities(away_lambda, home_lambda, max_runs=15):
     away_win_prob = np.sum(np.tril(prob_matrix, -1).T)
     home_win_prob = np.sum(np.tril(prob_matrix, -1))
     
-    # Normalize to 100% (removing tie probability)
     total_decisive_prob = away_win_prob + home_win_prob
     if total_decisive_prob == 0: return 0.5, 0.5
     return (away_win_prob / total_decisive_prob), (home_win_prob / total_decisive_prob)
@@ -32,90 +31,72 @@ def odds_to_prob(american_odds):
 
 # --- APP UI ---
 st.title("⚾ MLB Value Scanner v1.0")
-st.subheader("Automated Poisson Distribution & Value Finder")
 
 # 1. DATA INGESTION
 @st.cache_data(ttl=3600)
 def get_mlb_data():
-    current_year = datetime.datetime.now().year
-    # Using direct calls to avoid import errors
-    batting = pyb.team_batting(current_year)[['Team', 'R', 'G']]
-    batting['Runs/GM'] = batting['R'] / batting['G']
-    
-    pitching = pyb.team_pitching(current_year)[['Team', 'R', 'G']]
-    pitching['RA/GM'] = pitching['R'] / pitching['G']
-    
-    df = pd.merge(batting[['Team', 'Runs/GM']], pitching[['Team', 'RA/GM']], on='Team')
-    return df
+    try:
+        current_year = datetime.datetime.now().year
+        batting = pyb.team_batting(current_year)[['Team', 'R', 'G']]
+        batting['Runs/GM'] = batting['R'] / batting['G']
+        pitching = pyb.team_pitching(current_year)[['Team', 'R', 'G']]
+        pitching['RA/GM'] = pitching['R'] / pitching['G']
+        return pd.merge(batting[['Team', 'Runs/GM']], pitching[['Team', 'RA/GM']], on='Team')
+    except:
+        return pd.DataFrame()
 
-try:
-    stats_df = get_mlb_data()
+stats_df = get_mlb_data()
+
+if stats_df.empty:
+    st.warning("⚠️ Live Stats Connection Blocked. Using Manual Entry Mode.")
+    # Fallback list of teams
+    mlb_teams = ["ATL", "PHI", "NYM", "MIA", "WSH", "CHC", "MIL", "STL", "CIN", "PIT", "LAD", "SF", "SD", "ARI", "COL", "NYY", "BAL", "TOR", "TB", "BOS", "CLE", "MIN", "DET", "KC", "CWS", "HOU", "SEA", "TEX", "LAA", "OAK"]
+else:
     st.success("Live MLB Stats Loaded Successfully")
-except Exception as e:
-    st.error(f"Error fetching stats: {e}")
-    stats_df = pd.DataFrame(columns=['Team', 'Runs/GM', 'RA/GM'])
+    mlb_teams = stats_df['Team'].tolist()
 
 # 2. MATCHUP INPUT
 st.markdown("### Today's Matchups")
-num_games = st.number_input("Number of Games to Analyze", min_value=1, max_value=16, value=5)
+num_games = st.number_input("Number of Games", min_value=1, max_value=15, value=3)
 
 input_data = []
 
 for i in range(num_games):
     with st.expander(f"Game {i+1}", expanded=True):
         c1, c2, c3, c4 = st.columns(4)
-        away_team = c1.selectbox(f"Away Team", stats_df['Team'].tolist(), key=f"away_{i}")
-        home_team = c2.selectbox(f"Home Team", stats_df['Team'].tolist(), key=f"home_{i}")
-        away_odds = c3.number_input(f"Away ML (e.g. -110)", value=-110, key=f"a_odds_{i}")
-        home_odds = c4.number_input(f"Home ML (e.g. +105)", value=100, key=f"h_odds_{i}")
+        a_team = c1.selectbox(f"Away Team", mlb_teams, key=f"a_t_{i}")
+        h_team = c2.selectbox(f"Home Team", mlb_teams, key=f"h_t_{i}")
+        a_odds = c3.number_input(f"Away ML", value=-110, key=f"a_o_{i}")
+        h_odds = c4.number_input(f"Home ML", value=100, key=f"h_o_{i}")
         
-        if not stats_df.empty:
-            # Get Stats
-            a_stats = stats_df[stats_df['Team'] == away_team].iloc[0]
-            h_stats = stats_df[stats_df['Team'] == home_team].iloc[0]
-            
-            # Calculations (E and F logic from sheet)
-            a_lambda = a_stats['Runs/GM'] * (h_stats['RA/GM'] / LEAGUE_AVG_RPG)
-            h_lambda = h_stats['Runs/GM'] * (a_stats['RA/GM'] / LEAGUE_AVG_RPG)
-            
-            # Win Probs (P and Q logic)
-            a_win_p, h_win_p = calculate_win_probabilities(a_lambda, h_lambda)
-            
-            # Vegas Prob (N and O logic)
-            v_away_p = odds_to_prob(away_odds)
-            v_home_p = odds_to_prob(home_odds)
-            
-            # Edge (R and S logic)
-            a_edge = a_win_p - v_away_p
-            h_edge = h_win_p - v_home_p
-            
-            # EV (T and U logic)
-            a_ev = ((a_win_p / v_away_p) - 1) * 100
-            h_ev = ((h_win_p / v_home_p) - 1) * 100
-            
-            input_data.append({
-                "Away": away_team,
-                "Home": home_team,
-                "Proj Away": round(a_lambda, 2),
-                "Proj Home": round(h_lambda, 2),
-                "Model Away %": f"{round(a_win_p * 100, 2)}%",
-                "Vegas Away %": f"{round(v_away_p * 100, 2)}%",
-                "Away Edge": f"{round(a_edge * 100, 2)}%",
-                "Away EV": round(a_ev, 2),
-                "Home EV": round(h_ev, 2)
-            })
+        # Manual stat entry if live data failed
+        if stats_df.empty:
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            a_rpg = sc1.number_input(f"{a_team} Runs/GM", value=4.5, key=f"a_r_{i}")
+            a_ra = sc2.number_input(f"{a_team} RA/GM", value=4.5, key=f"a_ra_{i}")
+            h_rpg = sc3.number_input(f"{h_team} Runs/GM", value=4.5, key=f"h_r_{i}")
+            h_ra = sc4.number_input(f"{h_team} RA/GM", value=4.5, key=f"h_ra_{i}")
+        else:
+            a_rpg = stats_df[stats_df['Team'] == a_team]['Runs/GM'].values[0]
+            a_ra = stats_df[stats_df['Team'] == a_team]['RA/GM'].values[0]
+            h_rpg = stats_df[stats_df['Team'] == h_team]['Runs/GM'].values[0]
+            h_ra = stats_df[stats_df['Team'] == h_team]['RA/GM'].values[0]
+        
+        # Calculation Logic
+        a_lambda = a_rpg * (h_ra / LEAGUE_AVG_RPG)
+        h_lambda = h_rpg * (a_ra / LEAGUE_AVG_RPG)
+        a_win_p, h_win_p = calculate_win_probabilities(a_lambda, h_lambda)
+        v_a_p, v_h_p = odds_to_prob(a_odds), odds_to_prob(h_odds)
+        
+        input_data.append({
+            "Away": a_team, "Home": h_team,
+            "Proj Away": round(a_lambda, 2), "Proj Home": round(h_lambda, 2),
+            "Away EV": round(((a_win_p / v_a_p) - 1) * 100, 2),
+            "Home EV": round(((h_win_p / v_h_p) - 1) * 100, 2)
+        })
 
 # 3. DISPLAY RESULTS
 if input_data:
-    results_df = pd.DataFrame(input_data)
-    
-    def color_ev(val):
-        if isinstance(val, (int, float)):
-            color = '#00FF00' if val > 10 else '#90EE90' if val > 5 else 'white' if val >= 0 else '#FFCCCB'
-            return f'background-color: {color}; color: black'
-        return ''
-
+    res_df = pd.DataFrame(input_data)
     st.markdown("### Value Analysis")
-    st.dataframe(results_df.style.applymap(color_ev, subset=['Away EV', 'Home EV']))
-
-st.info("Bets marked in dark green show a high mathematical edge (>10% EV).")
+    st.dataframe(res_df.style.applymap(lambda x: 'background-color: #00FF00; color: black' if x > 10 else ('background-color: #90EE90; color: black' if x > 5 else ''), subset=['Away EV', 'Home EV']))
