@@ -16,27 +16,23 @@ def calculate_poisson_win_prob(away_lambda, home_lambda):
     return prob_away / (prob_away + prob_home)
 
 def get_detailed_tactical_notes(row):
-    """Generates explicit notes on Sharp direction and Model Value."""
+    """Explicitly names the sharp target and model value."""
     notes = []
-    
-    # SHARP ANALYSIS
     sharp_val = row['Sharp_Diff']
-    if sharp_val > 10:
-        notes.append(f"🐳 **SHARPS ON {row['Away'].upper()}**: Big money discrepancy ({sharp_val:+.0f}%) favoring the Visitors.")
-    elif sharp_val < -10:
-        notes.append(f"🏠 **SHARPS ON {row['Home'].upper()}**: Professional money is backing the Home side ({abs(sharp_val):.0f}% diff).")
     
-    # MODEL VALUE ANALYSIS
-    if row['Away_EV'] > 0.10:
-        notes.append(f"💰 **MODEL VALUE ({row['Away']})**: Poisson projections show massive +EV at {row['Away_ML']} odds.")
-    elif row['Home_EV'] > 0.10:
-        notes.append(f"💰 **MODEL VALUE ({row['Home']})**: Mathematical edge on the Home side according to Poisson.")
-
-    # TRAP DETECTION
-    if row['Away_EV'] > 0.05 and sharp_val < -15:
-        notes.append(f"⚠️ **TRAP ALERT**: Model likes {row['Away']}, but Sharps are hammering {row['Home']}. Proceed with caution.")
+    # Sharp Logic
+    if sharp_val > 10:
+        notes.append(f"🐳 **SHARPS ON {row['Away'].upper()}**: Discrepancy of {sharp_val:+.0f}% favoring the Visitors.")
+    elif sharp_val < -10:
+        notes.append(f"🏠 **SHARPS ON {row['Home'].upper()}**: Professional money backing the Home side ({abs(sharp_val):.0f}% diff).")
+    
+    # Model Logic
+    if row['Away_EV'] > 0.08:
+        notes.append(f"🎯 **MODEL EDGE ({row['Away']})**: Poisson projections show a +EV opportunity.")
+    elif row['Home_EV'] > 0.08:
+        notes.append(f"🎯 **MODEL EDGE ({row['Home']})**: Mathematical value identified on the Home side.")
         
-    return notes if notes else ["Market and model are currently in equilibrium."]
+    return notes if notes else ["Market and model are currently aligned."]
 
 # --- 2. DATA PROCESSING ---
 @st.cache_data(ttl=300)
@@ -45,8 +41,6 @@ def fetch_matchups():
     try:
         response = scraper.get("https://data.vsin.com/betting-splits/?source=DK&sport=MLB")
         df = pd.read_html(io.StringIO(response.text), flavor='lxml')[0]
-        
-        # Merge rows into Matchups
         away = df.iloc[::2].reset_index(drop=True)
         home = df.iloc[1::2].reset_index(drop=True)
         
@@ -63,51 +57,56 @@ def fetch_matchups():
     except: return pd.DataFrame()
 
 # --- 3. UI DASHBOARD ---
-st.title("⚾ MLB Tactical Matchup Center")
+st.title("⚾ MLB Matchup Center: Vegas vs. Poisson")
 
 df = fetch_matchups()
 
 if not df.empty:
-    # Poisson Setup (Using your spreadsheet's lambda logic)
-    df['Away_Win_Prob'] = df.apply(lambda x: calculate_poisson_win_prob(4.5, 4.2), axis=1) # Replace with real lambdas
-    df['Home_Win_Prob'] = 1 - df['Away_Win_Prob']
+    # --- POISSON MATH ---
+    # Update these lambdas with your actual daily projections
+    df['Away_Win_%'] = df.apply(lambda x: calculate_poisson_win_prob(4.5, 4.2), axis=1)
+    df['Home_Win_%'] = 1 - df['Away_Win_%']
     
-    # EV Calculations for both sides
     def ev(p, ml):
         if pd.isna(ml): return 0
         dec = (ml/100)+1 if ml > 0 else (100/abs(ml))+1
         return (p * (dec-1)) - (1-p)
 
-    df['Away_EV'] = df.apply(lambda x: ev(x['Away_Win_Prob'], x['Away_ML']), axis=1)
-    df['Home_EV'] = df.apply(lambda x: ev(x['Home_Win_Prob'], x['Home_ML']), axis=1)
+    df['Away_EV'] = df.apply(lambda x: ev(x['Away_Win_%'], x['Away_ML']), axis=1)
+    df['Home_EV'] = df.apply(lambda x: ev(x['Home_Win_%'], x['Home_ML']), axis=1)
 
-    # MASTER TABLE
+    # --- TABLE DISPLAY ---
     st.subheader("🏁 Full Slate Analysis")
-    # Custom display to show "Sharp Side" explicitly
-    view = df[['Away', 'Home', 'Away_ML', 'Home_ML', 'Away_EV', 'Home_EV', 'Sharp_Diff']].copy()
+    
+    # Re-adding the missing columns from image_2ac97a.png
+    display_df = df[[
+        'Away', 'Home', 
+        'Away_ML', 'Home_ML', 
+        'Away_Win_%', 'Home_Win_%', 
+        'Away_EV', 'Home_EV', 
+        'Sharp_Diff'
+    ]].copy()
     
     st.dataframe(
-        view.style.format({
-            'Away_EV': '{:.2%}', 'Home_EV': '{:.2%}', 'Sharp_Diff': '{:+.0f}%'
+        display_df.style.format({
+            'Away_Win_%': '{:.1%}', 'Home_Win_%': '{:.1%}',
+            'Away_EV': '{:.2%}', 'Home_EV': '{:.2%}',
+            'Sharp_Diff': '{:+.0f}%'
         }).background_gradient(subset=['Away_EV', 'Home_EV', 'Sharp_Diff'], cmap='RdYlGn'),
         hide_index=True, use_container_width=True
     )
 
-    # DETAILED SCOUTING REPORTS
+    # --- DETAILED SCOUTING REPORTS ---
     st.divider()
     st.subheader("🧠 Tactical Scouting Reports")
-    
     for _, row in df.iterrows():
         notes = get_detailed_tactical_notes(row)
         with st.expander(f"Scouting: {row['Away']} @ {row['Home']}"):
-            for n in notes:
-                st.write(n)
-            
-            # Clarity Metrics
+            for n in notes: st.write(n)
             c1, c2, c3 = st.columns(3)
-            c1.metric("Away EV", f"{row['Away_EV']:.1%}")
-            c2.metric("Home EV", f"{row['Home_EV']:.1%}")
+            c1.metric("Vegas Line", f"{row['Away_ML']}/{row['Home_ML']}")
+            c2.metric("Away Poisson Win %", f"{row['Away_Win_%']:.1%}")
             
-            # This directly answers "Who are the sharps on?"
-            sharp_team = row['Away'] if row['Sharp_Diff'] > 0 else row['Home']
-            c3.metric("Sharp Target", sharp_team, f"{abs(row['Sharp_Diff'])}% Diff")
+            # This directly identifies the sharp side for you
+            sharp_target = row['Away'] if row['Sharp_Diff'] > 0 else row['Home']
+            c3.metric("Sharp Target", sharp_target, f"{abs(row['Sharp_Diff'])}% Diff")
