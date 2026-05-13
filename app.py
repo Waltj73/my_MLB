@@ -1,64 +1,49 @@
 import streamlit as st
 import pandas as pd
 
-# --- 1. CONFIG ---
 st.set_page_config(page_title="MLB Power Terminal", layout="wide")
-
 SHEET_ID = '1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0'
-# Target the 'Matchups' tab
 url = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Matchups'
 
 st.title("🏹 MLB Institutional Signal Terminal")
-st.markdown("---")
 
 try:
-    # 2. THE ENGINE: Load raw and strip all whitespace from headers
-    df = pd.read_csv(url, skiprows=2)
-    df.columns = df.columns.str.strip() # This kills the hidden spaces causing the error
+    # 1. Load the raw file without skipping anything first
+    raw_df = pd.read_csv(url, header=None)
     
-    # Filter for active games
-    df = df.dropna(subset=[col for col in df.columns if 'Away Team' in col]).iloc[:15].copy()
-
-    # 3. DYNAMIC COLUMN FINDER
-    # We find your columns even if they have weird names like ' EV ' or 'Sharp ML'
-    ev_col = [c for c in df.columns if 'EV' in c][0]
-    sharp_col = [c for c in df.columns if 'Sharp' in c][0]
-    away_col = [c for c in df.columns if 'Away Team' in c][0]
-    home_col = [c for c in df.columns if 'Home Team' in c][0]
-
-    # Convert to numeric
-    df['EV_Num'] = pd.to_numeric(df[ev_col], errors='coerce').fillna(0)
-    df['Sharp_Num'] = pd.to_numeric(df[sharp_col], errors='coerce').fillna(0)
+    # 2. Find the row index where 'Away Team' actually exists
+    # This prevents the 'index out of range' error by locating the data dynamically
+    mask = raw_df.apply(lambda x: x.astype(str).str.contains('Away Team', case=False).any(), axis=1)
+    if not mask.any():
+        st.error("Could not locate 'Away Team' in the Matchups tab. Check sheet headers.")
+        st.stop()
     
-    # TRADING LOGIC: Calculate Conviction Score
-    df['Conviction'] = (df['EV_Num'].abs() * 0.7) + (df['Sharp_Num'].abs() * 0.3)
+    target_row = mask.idxmax()
+    
+    # 3. Rebuild the dataframe from that specific point
+    df = raw_df.iloc[target_row:].copy()
+    df.columns = df.iloc[0].str.strip() # Clean headers
+    df = df.iloc[1:].dropna(subset=[c for c in df.columns if 'Away' in c]).reset_index(drop=True)
 
-    # 4. THE COMMAND CENTER
-    col1, col2 = st.columns([2, 1])
+    # 4. Identify EV and Sharp columns dynamically
+    ev_col = next((c for c in df.columns if 'EV' in str(c).upper()), None)
+    sharp_col = next((c for c in df.columns if 'SHARP' in str(c).upper()), None)
 
-    with col1:
-        st.subheader("🔥 High-Intensity Signals")
-        # Pulls the Colorado +21.08 EV / 16% Sharp types
+    if ev_col and sharp_col:
+        df['EV_Num'] = pd.to_numeric(df[ev_col], errors='coerce').fillna(0)
+        df['Sharp_Num'] = pd.to_numeric(df[sharp_col], errors='coerce').fillna(0)
+        df['Conviction'] = (df['EV_Num'].abs() * 0.7) + (df['Sharp_Num'].abs() * 0.3)
+
+        # Display the Signals
         signals = df[df['Conviction'] > 10].sort_values('Conviction', ascending=False)
-        
         if not signals.empty:
-            st.dataframe(
-                signals[[away_col, home_col, ev_col, sharp_col, 'Conviction']]
-                .style.background_gradient(cmap='RdYlGn', subset=['Conviction']),
-                use_container_width=True, hide_index=True
-            )
+            st.subheader("🔥 High-Intensity Signals")
+            st.dataframe(signals.style.background_gradient(cmap='RdYlGn', subset=['Conviction']), use_container_width=True)
         else:
-            st.info("Scanning Matchups... No high-conviction alignments active.")
-
-    with col2:
-        st.subheader("⚠️ Institutional Traps")
-        # Catching the Pittsburgh/Washington style divergence
-        traps = df[(df['Sharp_Num'].abs() > 10) & (df['EV_Num'] < -10)]
-        if not traps.empty:
-            for _, row in traps.iterrows():
-                st.warning(f"**Trap**: {row[away_col]} ({row[sharp_col]} Sharp vs {row[ev_col]} EV)")
-        else:
-            st.success("No significant Sharp-vs-Model traps detected.")
+            st.info("No high-conviction alignments found. Scanning...")
+            
+    else:
+        st.warning(f"Found headers but couldn't find 'EV' or 'Sharp'. Columns found: {list(df.columns)}")
 
 except Exception as e:
-    st.error(f"Syncing... (Technical Log: {e})")
+    st.error(f"Surgical Strike Failed: {e}")
