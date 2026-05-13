@@ -26,8 +26,6 @@ df = load_data()
 if not df.empty:
     try:
         df = df.fillna('')
-        
-        # Filter for active game rows (Column A length check)
         main_df = df[df.iloc[:, 0].astype(str).str.len() > 2].copy()
 
         def to_n(v): 
@@ -56,7 +54,6 @@ if not df.empty:
         # --- 4. EXECUTIVE METRICS ---
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total Games", len(master_table))
-        
         sharp_count = len(master_table[master_table['Sharp Dog'].str.len() > 1])
         c2.metric("Sharp Targets", sharp_count)
         
@@ -66,7 +63,7 @@ if not df.empty:
         c3.metric("High EV Edges", ev_edges)
         c4.metric("Market Status", "LIVE")
 
-        # --- 5. VISUAL TACTICAL BOARD (Expanded Height) ---
+        # --- 5. VISUAL TACTICAL BOARD (Maximized Height) ---
         st.subheader("Tactical Board")
         
         def highlight_logic(row):
@@ -80,11 +77,11 @@ if not df.empty:
         st.dataframe(
             master_table.style.apply(highlight_logic, axis=1),
             use_container_width=True,
-            height=800, # Increased height to fit more games without scrolling
+            height=1000, # Expanded height for full table visibility
             hide_index=True
         )
 
-        # --- 6. SHARP RATIONALE & CONFLICT ANALYSIS ---
+        # --- 6. SHARP OUTLOOK & DETAILED NOTES ---
         st.divider()
         col_l, col_r = st.columns(2)
 
@@ -95,20 +92,32 @@ if not df.empty:
                 pick = str(row['Model Pick']).strip()
                 if len(s_dog) > 1:
                     if s_dog in pick:
-                        st.success(f"**CONVICTION**: Sharps & Model on {s_dog}")
+                        st.success(f"**CONVICTION**: Sharps & Model both aligned on {s_dog}")
                     else:
-                        st.warning(f"**CONFLICT**: Sharps on {s_dog} vs Model Pick: {pick}")
+                        st.warning(f"**CONFLICT**: Sharps moving on {s_dog} vs Model Pick: {pick}")
 
         with col_r:
-            st.subheader("📝 Scouting Notes (The 'Why')")
+            st.subheader("📝 Tactical Outlook")
             for _, row in master_table.iterrows():
                 note = str(row['Tactical Note']).strip()
-                if len(note) > 3:
-                    with st.expander(f"Analysis: {row['Matchup']}"):
-                        st.write(f"**Field Intelligence**: {note}")
-                else:
-                    with st.expander(f"Data Intel: {row['Matchup']}"):
-                        st.write(f"Value target on **{row['Model Pick']}** with EV: **{row['EV (A/H)']}**.")
+                s_dog = str(row['Sharp Dog']).strip()
+                pick = str(row['Model Pick']).strip()
+                ev = row['EV (A/H)']
+                
+                # Automated Detailed Outlook implementation
+                with st.expander(f"Outlook: {row['Matchup']}"):
+                    if len(note) > 3:
+                        st.markdown(f"**User Intelligence**: {note}")
+                    
+                    # Implementation of automated data outlook
+                    st.markdown("---")
+                    st.markdown(f"**Top Pick Analysis**: The model is currently prioritizing **{pick}** based on an EV profile of **{ev}**.")
+                    
+                    if len(s_dog) > 1:
+                        st.markdown(f"**Sharp Outlook**: Professional handle is tracking toward **{s_dog}**. " + 
+                                   ("This reinforces the model conviction." if s_dog in pick else "Monitor for late-market deviation."))
+                    else:
+                        st.markdown("**Sharp Outlook**: No significant professional deviation detected at this time.")
 
     except Exception as e:
         st.error(f"Logic Error: {e}")
