@@ -1,12 +1,13 @@
 import streamlit as st
 import pandas as pd
 import cloudscraper
+import io
 from streamlit_autorefresh import st_autorefresh
 from bs4 import BeautifulSoup
 
 # --- 1. CONFIG & REFRESH ---
-st.set_page_config(page_title="MLB Betting Edge: Live Sharp Analysis", layout="wide")
-# Auto-refresh every 5 minutes to catch odds shifts
+st.set_page_config(page_title="MLB Betting Edge: Advanced Sharp Analysis", layout="wide")
+# Auto-refresh every 5 minutes to keep the data fresh
 st_autorefresh(interval=5 * 60 * 1000, key="vsin_update")
 
 # --- 2. DATA SCRAPER ---
@@ -18,76 +19,83 @@ def fetch_vsin_splits():
     
     try:
         response = scraper.get(url)
-        # Use 'lxml' (or 'bs4') to parse the table
-        tables = pd.read_html(response.text, flavor='bs4')
+        
+        # Wrap the raw HTML text in a StringIO buffer so Pandas treats it as data
+        html_data = io.StringIO(response.text)
+        
+        # Read the table using lxml as the engine
+        tables = pd.read_html(html_data, flavor='lxml')
         
         if not tables:
             return pd.DataFrame()
 
-        df = tables[0]
+        # Iterate through tables to find the one containing betting data
+        # VSiN typically has 'Matchup' or 'Handle' in the headers
+        target_df = pd.DataFrame()
+        for df in tables:
+            if any(term in str(df.columns) for term in ['Matchup', 'Handle', 'Bets', 'DraftKings']):
+                target_df = df
+                break
         
-        # Flatten VSiN's multi-row headers (e.g., 'Moneyline' > 'Handle %')
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = ['_'.join(col).strip() for col in df.columns.values]
+        if target_df.empty:
+            target_df = tables[0] # Fallback to first table if search fails
+
+        # Handle Multi-Index columns (VSiN stacks 'Moneyline' over 'Handle %')
+        if isinstance(target_df.columns, pd.MultiIndex):
+            target_df.columns = ['_'.join(col).strip() for col in target_df.columns.values]
         
-        # --- CLEANING DATA ---
-        # Rename VSiN columns to match your existing logic
-        # VSiN typically uses columns like 'Matchup', 'Handle_%', 'Bets_%'
-        # We find the columns that contain key words to remain flexible
-        cols = df.columns.tolist()
-        
-        # Search for teams and percentages in the raw scrape
-        df['Away'] = df.iloc[:, 1].str.split('@').str[0].str.strip()
-        df['Home'] = df.iloc[:, 1].str.split('@').str[1].str.strip()
-        
-        # Identify Handle and Bet % columns (usually indexed by their headers)
-        # These typically come in pairs for Away/Home
-        # Note: Actual VSiN column names vary by source, but usually contain 'Handle' and 'Bets'
-        return df
+        return target_df
 
     except Exception as e:
-        st.error(f"Scraper Error: {e}")
+        # We limit the error display to avoid the "HTML wall"
+        st.error(f"Scraper Error: {str(e)[:100]}")
         return pd.DataFrame()
 
 # --- 3. ANALYTICS LOGIC ---
-def get_detailed_analysis(away, home, sharp_diff):
-    reports = {
-        ("Angels", "Guardians"): "SHARP ALERT: Massive discrepancy. Targeting Angels bullpen.",
-        ("Nationals", "Reds"): "SITUATIONAL EDGE: High winds at GABP. Professional money on Reds ML.",
-    }
-    default_note = f"MARKET FLOW: No extreme divergence. Sharp Diff: {sharp_diff}%."
-    return reports.get((away, home), default_note)
+def get_detailed_analysis(matchup_name, sharp_diff):
+    """Provides automated scouting notes based on market movement."""
+    if abs(sharp_diff) > 15:
+        return f"🚨 **SHARP ALERT**: Significant {sharp_diff}% divergence between Handle and Bets. Professional money is heavy on one side."
+    return f"Market flow remains balanced. Current Sharp Diff: {sharp_diff}%."
 
 # --- 4. EXECUTION ---
 st.title("⚾ MLB Betting Edge: Advanced Sharp Analysis")
-st.caption(f"Last sync: {pd.Timestamp.now().strftime('%H:%M:%S')}")
+st.caption(f"Last updated: {pd.Timestamp.now().strftime('%H:%M:%S')}")
 
-df_raw = fetch_vsin_splits()
+df = fetch_vsin_splits()
 
-if not df_raw.empty:
-    # Here we simulate the columns based on typical VSiN structure
-    # You may need to adjust these strings based on the 'df_raw' display below
-    try:
-        # Example Calculation (Adjust column names if VSiN changes them)
-        # df_raw['Sharp Diff'] = df_raw['Handle %'] - df_raw['Bets %']
-        
-        st.header("📋 Live Betting Splits")
-        st.dataframe(df_raw, use_container_width=True)
-        
-        st.divider()
-        
-        # Summary Section
-        st.header("📝 Sharp Scouting Reports")
-        # Loop through games to provide notes
-        for _, row in df_raw.head(5).iterrows():
-            with st.container():
-                matchup = row.iloc[1] # Usually the 'Matchup' column
-                st.markdown(f"### {matchup}")
-                # analysis_text = get_detailed_analysis(row['Away'], row['Home'], 0)
-                # st.info(analysis_text)
+if not df.empty:
+    # 1. CLEANING & CALCULATIONS
+    # Attempt to find common column names from VSiN's dynamic structure
+    # We look for the first column that contains 'Handle' and the first for 'Bets'
+    handle_col = next((c for c in df.columns if 'Handle' in c and '%' in c), None)
+    bets_col = next((c for c in df.columns if 'Bets' in c and '%' in c), None)
+    matchup_col = next((c for c in df.columns if 'Matchup' in c or 'Game' in c), df.columns[1])
 
-    except Exception as e:
-        st.warning(f"Data mapping error: {e}. Checking raw table structure...")
-        st.write(df_raw.columns.tolist())
+    if handle_col and bets_col:
+        # Clean string percentages to floats
+        for col in [handle_col, bets_col]:
+            df[col] = df[col].astype(str).str.replace('%', '').astype(float)
+        
+        df['Sharp Diff'] = df[handle_col] - df[bets_col]
+    
+    # --- UI LAYOUT ---
+    st.header("📋 Live Betting Splits")
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # Section 2: Top Moves
+    st.header("🎯 Significant Sharp Moves")
+    if 'Sharp Diff' in df.columns:
+        top_moves = df[abs(df['Sharp Diff']) > 10].copy()
+        
+        if not top_moves.empty:
+            for _, row in top_moves.iterrows():
+                with st.expander(f"View Analysis: {row[matchup_col]}"):
+                    st.info(get_detailed_analysis(row[matchup_col], row['Sharp Diff']))
+        else:
+            st.write("No major sharp discrepancies detected at this hour.")
+    
 else:
-    st.info("Awaiting live data from VSiN... Ensure 'lxml' is installed.")
+    st.warning("Awaiting live data. If this persists, verify your 'requirements.txt' includes lxml and html5lib.")
