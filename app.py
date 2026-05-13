@@ -1,13 +1,14 @@
 import streamlit as st
 import pandas as pd
 
-# --- 1. DATA SYNC ---
+# --- 1. DATA CONNECTION ---
 SHEET_ID = '1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0'
 URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0'
 
 @st.cache_data(ttl=15)
 def load_data():
     try:
+        # Load from Row 2 headers
         df = pd.read_csv(URL, skiprows=1).fillna('')
         df.columns = [str(c).strip() for c in df.columns]
         return df
@@ -15,28 +16,7 @@ def load_data():
         st.error(f"Sync Error: {e}")
         return pd.DataFrame()
 
-# --- 2. THE GENERATOR (If no notes exist in your sheet) ---
-def generate_scouting_note(row):
-    try:
-        # Pulling your specific metrics: Sharp %, EV, and Model Pick
-        sharp_v = str(row['Sharp ML %']).split('/')[0].strip()
-        ev_val = str(row['EV (A/H)']).split('/')[0].strip()
-        pick = str(row['Model Pick'])
-        
-        note = f"Analysis for {row['Matchup']}: "
-        if "Away" in pick:
-            note += f"Model shows value on the visitor with an EV of {ev_val}. "
-        else:
-            note += f"Home side is the target here. "
-            
-        if len(sharp_v) > 1 and "%" in sharp_v:
-            note += f"Sharp money is currently sitting at {sharp_v} tracking institutional flow."
-            
-        return note
-    except:
-        return "Tactical data pending for this matchup."
-
-# --- 3. UI CONFIG ---
+# --- 2. CONFIG & UI ---
 st.set_page_config(page_title="MLB Command Center", layout="wide")
 st.title("⚾ 2026 MLB Tactical Command Center")
 
@@ -44,20 +24,40 @@ df = load_data()
 
 if not df.empty:
     try:
-        # Mapping your 2026 MLB data columns
+        # --- DYNAMIC COLUMN MAPPING ---
+        # This prevents the "wrong column" issue by finding the headers by name
+        def get_col(name_list, default_idx):
+            for name in name_list:
+                if name in df.columns:
+                    return df[name]
+            return df.iloc[:, default_idx]
+
+        # Map metrics based on your previous corrections
+        matchup = df.iloc[:, 0].astype(str) + " @ " + df.iloc[:, 1].astype(str)
+        # Targeting Columns N & O for Sharp ML
+        sharp_ml = df.iloc[:, 13].astype(str) + " / " + df.iloc[:, 14].astype(str)
+        sharp_dog = df.iloc[:, 15].astype(str)
+        # Targeting Columns W & X for EV
+        ev_vals = df.iloc[:, 22].astype(str) + " / " + df.iloc[:, 23].astype(str)
+        picks = df.iloc[:, 25].astype(str) + " " + df.iloc[:, 26].astype(str)
+        
+        # Look for notes in Column AB or by name
+        notes = get_col(["Tactical Note", "Notes", "Scouting"], 27).astype(str)
+
         master_table = pd.DataFrame({
-            "Matchup": df.iloc[:, 0].astype(str) + " @ " + df.iloc[:, 1].astype(str),
-            "Sharp ML %": df.iloc[:, 13].astype(str) + " / " + df.iloc[:, 14].astype(str),
-            "Sharp Dog": df.iloc[:, 15].astype(str),
-            "EV (A/H)": df.iloc[:, 22].astype(str) + " / " + df.iloc[:, 23].astype(str),
-            "Model Pick": df.iloc[:, 25].astype(str) + " " + df.iloc[:, 26].astype(str)
+            "Matchup": matchup,
+            "Sharp ML %": sharp_ml,
+            "Sharp Dog": sharp_dog,
+            "EV (A/H)": ev_vals,
+            "Model Pick": picks,
+            "Raw_Notes": notes
         })
 
-        # --- 4. TACTICAL BOARD ---
+        # --- 3. TACTICAL BOARD ---
         st.subheader("Tactical Board")
-        st.dataframe(master_table, use_container_width=True, height=350)
+        st.dataframe(master_table.drop(columns=['Raw_Notes']), use_container_width=True, height=350)
 
-        # --- 5. DYNAMIC REPORTS ---
+        # --- 4. THE REPORT (Layout matching image_1e22b8.png) ---
         st.divider()
         col_l, col_r = st.columns(2)
 
@@ -70,13 +70,19 @@ if not df.empty:
                     st.success(f"**CONVICTION**: Sharps & Model on {s_dog}")
 
         with col_r:
-            st.markdown("### 📝 Auto-Generated Scouting Notes")
+            st.markdown("### 📝 Detailed Scouting Notes")
             for _, row in master_table.iterrows():
-                # Since there are no notes in the sheet, the script generates them here
-                note_content = generate_scouting_note(row)
+                note_content = str(row['Raw_Notes']).strip()
+                
+                # If the sheet note is empty, we auto-generate the 'Why'
+                if len(note_content) < 3:
+                    ev_text = row['EV (A/H)']
+                    ml_text = row['Sharp ML %']
+                    note_content = f"Model identifies value on {row['Model Pick']} with an EV of {ev_text}. Sharp money flow is currently {ml_text}."
+                
                 st.info(f"**{row['Matchup']}**\n\n{note_content}")
 
     except Exception as e:
-        st.error(f"Mapping Error: {e}")
+        st.error(f"Mapping Error: {e}. Check if your spreadsheet structure changed.")
 else:
-    st.info("🔄 Syncing with live data...")
+    st.info("🔄 Syncing with Google Sheets...")
