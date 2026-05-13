@@ -1,60 +1,75 @@
 import streamlit as st
 import pandas as pd
-from streamlit_autorefresh import st_autorefresh
+import numpy as np
 
-# --- 1. CONFIG ---
-st.set_page_config(page_title="Institutional Edge Scanner", layout="wide")
-st_autorefresh(interval=60 * 1000, key="edge_scanner")
+# --- 1. SYSTEM SETUP ---
+st.set_page_config(page_title="MLB Power Terminal", layout="wide")
 
-# --- 2. THE DATA SOURCE ---
+# This targets your Matchups tab specifically to pull the raw math
 SHEET_ID = '1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0'
-# Target the 'Matchups' tab specifically
 url = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Matchups'
 
-st.title("🏹 Institutional Edge Scanner")
-st.caption(f"Targeting: Matchups Tab | Live Sync: {pd.Timestamp.now().strftime('%H:%M:%S')}")
-
-try:
-    # Read and clean the Matchups data
-    df = pd.read_csv(url)
-    
-    # We find the core columns: Away Team, Home Team, EV, and Sharp
-    # We filter only for games that meet your 'Professional' thresholds
-    df['EV_Num'] = pd.to_numeric(df['EV'], errors='coerce').fillna(0)
-    df['Sharp_Num'] = pd.to_numeric(df['Sharp'], errors='coerce').fillna(0)
-
-    # LOGIC: The "High Conviction" Signal
-    # Only show games where:
-    # 1. EV is over 12 (Your Model Edge)
-    # 2. Sharp Action is over 10% (Market Confirmation)
-    high_conviction = df[(df['EV_Num'].abs() > 12) & (df['Sharp_Num'].abs() > 10)].copy()
-
-    if not high_conviction.empty:
-        st.subheader("🔥 High Conviction Signals")
-        st.write("Alignment between Model EV and Sharp Money detected.")
+# --- 2. THE ENGINE ---
+def run_analysis():
+    try:
+        # Pull the slate and find the 'Away Team' header
+        raw_data = pd.read_csv(url)
+        header_row = raw_data[raw_data.apply(lambda r: r.astype(str).str.contains('Away Team').any(), axis=1)].index[0]
         
-        # We calculate a 'Conviction Score' (EV + Sharp strength)
-        high_conviction['Conviction'] = (high_conviction['EV_Num'].abs() + high_conviction['Sharp_Num'].abs()) / 2
+        df = raw_data.iloc[header_row:].copy()
+        df.columns = df.iloc[0]
+        df = df.iloc[1:].dropna(subset=['Away Team']).reset_index(drop=True)
+
+        # Convert to numeric for our trading logic
+        df['EV'] = pd.to_numeric(df['EV'], errors='coerce').fillna(0)
+        df['Sharp'] = pd.to_numeric(df['Sharp'], errors='coerce').fillna(0)
         
-        # Displaying only the "Action" items
-        display = high_conviction[['Away Team', 'Home Team', 'EV', 'Sharp', 'Conviction']]
+        # --- LOGIC LAYER: THE "AIR GAP" CALCULATION ---
+        # We calculate 'Divergence'—how much the market is moving toward your prediction
+        df['Divergence_Score'] = (df['EV'].abs() * 0.6) + (df['Sharp'].abs() * 0.4)
         
+        return df
+    except Exception as e:
+        st.error(f"Engine Startup Failed: {e}")
+        return pd.DataFrame()
+
+# --- 3. THE COMMAND CENTER ---
+st.title("🏹 MLB Institutional Signal Terminal")
+st.markdown("---")
+
+data = run_analysis()
+
+if not data.empty:
+    # SECTOR 1: HIGH CONVICTION ALIGNMENTS
+    # This captures the +21.08 EV / 16% Sharp move on Colorado
+    conviction_threshold = 12
+    signals = data[data['Divergence_Score'] >= conviction_threshold].sort_values('Divergence_Score', ascending=False)
+
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        st.subheader("🔥 High-Intensity Signals")
+        st.write("Alignment detected between Model EV and Market Flow.")
+        
+        # We show only the 'Trading' columns
         st.dataframe(
-            display.style.background_gradient(cmap='Greens', subset=['Conviction']),
-            use_container_width=True,
-            hide_index=True
+            signals[['Away Team', 'Home Team', 'EV', 'Sharp', 'Divergence_Score']]
+            .style.background_gradient(cmap='RdYlGn', subset=['Divergence_Score']),
+            use_container_width=True, hide_index=True
         )
-    else:
-        st.info("Scanning for institutional flow... No high-conviction alignments found at this moment.")
 
-    # --- 3. SYSTEM ALERTS ---
-    # Instant notification if a 'Sharp' move hits your 15% threshold
-    extreme_moves = df[df['Sharp_Num'].abs() >= 15]
-    if not extreme_moves.empty:
-        st.divider()
-        st.subheader("⚠️ Extreme Sharp Alerts")
-        for _, row in extreme_moves.iterrows():
-            st.error(f"**{row['Away Team']}**: {row['Sharp']}% Sharp Action (Extreme Divergence)")
+    with col2:
+        st.subheader("⚠️ Sharp Warnings")
+        # Identifies 'Sharp Traps'—where money moves against your EV logic
+        traps = data[(data['Sharp'].abs() > 10) & (data['EV'] < 0)]
+        for _, row in traps.iterrows():
+            st.warning(f"**Trap Alert**: {row['Away Team']} has {row['Sharp']}% Sharp but negative EV.")
 
-except Exception as e:
-    st.error(f"Searching for data in Matchups... {e}")
+    # SECTOR 2: VOLATILITY MATRIX
+    st.markdown("---")
+    st.subheader("📊 Full Slate Sector Rotation")
+    # This helps you see where money is flowing league-wide at a glance
+    st.bar_chart(data=data.set_index('Away Team')['Sharp'])
+
+else:
+    st.info("Searching for institutional flow signals...")
