@@ -19,7 +19,7 @@ def calculate_ev(win_prob, ml_odds):
     dec = (ml_odds / 100) + 1 if ml_odds > 0 else (100 / abs(ml_odds)) + 1
     return (win_prob * (dec - 1)) - (1 - win_prob)
 
-# --- 2. THE POSITION-BASED SYNC ---
+# --- 2. DATA SYNC ---
 SHEET_ID = '1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0'
 GID = '1240994733'
 URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}'
@@ -27,47 +27,47 @@ URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=
 @st.cache_data(ttl=30)
 def load_data():
     try:
-        # Load the CSV without headers first to find the starting line
         raw = pd.read_csv(URL, header=None).fillna('')
-        
-        # Find the first row that actually looks like game data (Home/Away exists)
         start_row = 0
         for i, row in raw.iterrows():
             if any("away" in str(x).lower() for x in row.values):
                 start_row = i
                 break
-        
-        # Reload skipping only the trash at the top
         df = pd.read_csv(URL, skiprows=start_row)
         return df.dropna(how='all').reset_index(drop=True)
     except Exception as e:
         st.error(f"Sync Error: {e}")
         return pd.DataFrame()
 
-# --- 3. UI EXECUTION ---
+# --- 3. UI & ALIGNMENT ---
 st.set_page_config(page_title="MLB Tactical Command", layout="wide")
 st.title("⚾ MLB Tactical Command Center")
 
 df = load_data()
 
 if not df.empty:
-    # HELPER: Force column indexing by POSITION (0=A, 1=B, 2=C...)
-    # Adjusted based on standard VSiN/MLB sheet layouts
+    # --- DEBUG SECTION: SEE YOUR COLUMN INDEXES ---
+    with st.expander("🛠️ Debug: Column Alignment (Open this to check index numbers)"):
+        st.write("Match these index numbers to the 'COL_' variables in the code below.")
+        debug_df = pd.DataFrame([df.columns], columns=[f"Index {i}" for i in range(len(df.columns))])
+        st.table(debug_df)
+        st.dataframe(df.head(3))
+
+    # --- ADJUST THESE INDEX NUMBERS BASED ON THE TABLE ABOVE ---
+    COL_AWAY = 0    
+    COL_HOME = 1    
+    COL_A_EST = 5   
+    COL_H_EST = 6   
+    COL_ML = 7      
+    COL_HND = 12    
+    COL_BET = 13    
+
+    def clean_num(val):
+        s = str(val).replace('%', '').replace(',', '').strip()
+        return pd.to_numeric(s, errors='coerce')
+
     try:
-        # Define positions (Adjust these numbers if your sheet columns shift)
-        COL_AWAY = 0    # Col A
-        COL_HOME = 1    # Col B
-        COL_A_EST = 5   # Col F (Away EST Score)
-        COL_H_EST = 6   # Col G (Home EST Score)
-        COL_ML = 7      # Col H (MoneyML)
-        COL_HND = 12    # Col M (Handle %)
-        COL_BET = 13    # Col N (Bets %)
-
-        def clean_num(val):
-            s = str(val).replace('%', '').replace(',', '').strip()
-            return pd.to_numeric(s, errors='coerce')
-
-        # Calculations
+        # Data Processing
         df['Win_Prob'] = df.apply(lambda x: calculate_poisson_win_prob(
             clean_num(x.iloc[COL_A_EST]), 
             clean_num(x.iloc[COL_H_EST])
@@ -94,11 +94,9 @@ if not df.empty:
         m3.metric("Sharp Discrepancy", f"{g['Sharp_Diff']:.0f}%")
 
         st.divider()
-        st.write(f"📊 **Analytical Logic**: Using implied win probabilities and EV metrics.")
-        st.caption("🔄 Live sync active. No manual pasting required.")
+        st.caption("🔄 Data synced live from your MLB Google Sheet.")
 
     except Exception as e:
-        st.error(f"Data Alignment Error: {e}")
-        st.info("Check if your spreadsheet columns match the expected positions.")
+        st.error(f"Alignment Error: {e}")
 else:
-    st.info("🔄 Awaiting Data... Ensure your 'MLB' tab is populated.")
+    st.info("🔄 Awaiting Data...")
