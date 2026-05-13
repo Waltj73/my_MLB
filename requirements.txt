@@ -1,9 +1,6 @@
 streamlit
 pandas
-numpy
-scipy
-MLB-StatsAPI
-streamlit-autorefresh
 cloudscraper
-requests
+beautifulsoup4
 lxml
+streamlit-autorefresh
