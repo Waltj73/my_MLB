@@ -79,7 +79,7 @@ if not df.empty:
         st.dataframe(
             master_table.style.apply(highlight_logic, axis=1),
             use_container_width=True,
-            height=1000, 
+            height=700, 
             hide_index=True
         )
 
