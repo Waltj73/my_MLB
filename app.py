@@ -21,80 +21,73 @@ def calculate_ev(win_prob, ml_odds):
 
 # --- 2. DATA SYNC ---
 SHEET_ID = '1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0'
-GID = '1240994733' # Locks to the MLB tab
+GID = '1240994733'
 URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}'
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=10)
 def load_data():
     try:
-        # Step A: Load the sheet and find exactly where the game rows start
-        raw = pd.read_csv(URL, header=None).fillna('')
-        data_start = 0
-        for i, row in raw.iterrows():
-            if any(k in str(x).lower() for k in ["away", "home"] for x in row.values):
-                data_start = i
-                break
-        
-        # Step B: Reload skipping the trash above your headers
-        df = pd.read_csv(URL, skiprows=data_start)
-        return df.dropna(how='all').reset_index(drop=True)
+        # Load the rawest form of the data possible
+        df = pd.read_csv(URL).fillna(0)
+        df.columns = [str(c).strip() for c in df.columns]
+        return df
     except Exception as e:
         st.error(f"Sync Error: {e}")
         return pd.DataFrame()
 
-# --- 3. UI & ANALYTICS ---
+# --- 3. UI ---
 st.set_page_config(page_title="MLB Tactical Command", layout="wide")
 st.title("⚾ MLB Tactical Command Center")
 
 df = load_data()
 
 if not df.empty:
-    # --- HARD-CODED COLUMN POSITIONS ---
-    # These correspond to Columns A, B, C... in your MLB tab
+    # This is the "Safety Valve" - if the math fails, we can see the data below
+    with st.expander("🔍 View Raw Data Sync (Verify columns here)"):
+        st.dataframe(df)
+
+    # 4. FLEXIBLE COLUMN TARGETING
+    # We look for keywords. If 'Away EST' is in column 5 or column 10, it doesn't matter.
+    def get_col(names):
+        for c in df.columns:
+            if any(n.lower() in c.lower() for n in names): return c
+        return None
+
+    c_away = get_col(['away'])
+    c_home = get_col(['home'])
+    c_a_est = get_col(['away est', 'a_est'])
+    c_h_est = get_col(['home est', 'h_est'])
+    c_ml = get_col(['money', 'ml'])
+    c_hnd = get_col(['handle'])
+    c_bet = get_col(['bets'])
+
+    # 5. EXECUTION
     try:
-        POS_AWAY = 0    # Col A
-        POS_HOME = 1    # Col B
-        POS_A_EST = 5   # Col F (Away EST)
-        POS_H_EST = 6   # Col G (Home EST)
-        POS_ML = 7      # Col H (MoneyML)
-        POS_HND = 12    # Col M (Handle %)
-        POS_BET = 13    # Col N (Bets %)
+        def to_f(v):
+            return pd.to_numeric(str(v).replace('%','').strip(), errors='coerce')
 
-        def clean_val(val):
-            s = str(val).replace('%', '').replace(',', '').strip()
-            return pd.to_numeric(s, errors='coerce')
-
-        # Calculations
-        df['Win_Prob'] = df.apply(lambda x: calculate_poisson_win_prob(
-            clean_val(x.iloc[POS_A_EST]), 
-            clean_val(x.iloc[POS_H_EST])
-        ), axis=1)
+        df['WP'] = df.apply(lambda x: calculate_poisson_win_prob(to_f(x[c_a_est]), to_f(x[c_h_est])), axis=1)
+        df['EV_Calc'] = df.apply(lambda x: calculate_ev(x['WP'], to_f(x[c_ml])), axis=1)
         
-        df['EV'] = df.apply(lambda x: calculate_ev(
-            x['Win_Prob'], 
-            clean_val(x.iloc[POS_ML])
-        ), axis=1)
-        
-        df['Sharp_Diff'] = clean_val(df.iloc[:, POS_HND]) - clean_val(df.iloc[:, POS_BET])
+        # UI
+        games = (df[c_away].astype(str) + " @ " + df[c_home].astype(str)).tolist()
+        sel = st.selectbox("🎯 Select Matchup", games)
+        g = df[(df[c_away].astype(str) + " @ " + df[c_home].astype(str)) == sel].iloc[0]
 
-        # Matchup UI
-        matchups = (df.iloc[:, POS_AWAY].astype(str) + " @ " + df.iloc[:, POS_HOME].astype(str)).tolist()
-        choice = st.selectbox("🎯 Select Matchup", matchups)
-        g = df[(df.iloc[:, POS_AWAY].astype(str) + " @ " + df.iloc[:, POS_HOME].astype(str)) == choice].iloc[0]
-
-        # Final Dashboard
-        st.header(f"📈 Scouting Report: {g.iloc[POS_AWAY]} @ {g.iloc[POS_HOME]}")
+        # Final Dashboard metrics
         m1, m2, m3 = st.columns(3)
-        m1.metric("Model Win %", f"{g['Win_Prob']:.1%}")
-        m2.metric("Edge (EV)", f"{g['EV']:.2%}")
-        m3.metric("Sharp Discrepancy", f"{g['Sharp_Diff']:.0f}%")
-
+        m1.metric("Model Win %", f"{g['WP']:.1%}")
+        m2.metric("Edge (EV)", f"{g['EV_Calc']:.2%}")
+        
+        diff = to_f(g[c_hnd]) - to_f(g[c_bet])
+        m3.metric("Sharp Diff", f"{diff:.0f}%")
+        
         st.divider()
-        st.write(f"📊 **Data Source**: Using current Poisson Lambdas and Market Odds.")
-        st.caption("🔄 Data refreshed from MLB tab. Scalping-ready.")
+        st.write(f"**Live Scouting**: {g[c_away]} vs {g[c_home]}")
+        st.caption("🔄 Data auto-refreshed from MLB tab.")
 
     except Exception as e:
-        st.error(f"Data Alignment Error: {e}")
-        st.info("Check if your MLB tab layout matches Columns A through N.")
+        st.warning(f"Formatting Issue: {e}")
+        st.info("The app is connected, but the column names in your sheet might need a quick check.")
 else:
-    st.info("🔄 Connecting to Sheet... Ensure the MLB tab has active data.")
+    st.info("🔄 Connecting...")
