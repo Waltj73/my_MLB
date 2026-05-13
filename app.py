@@ -2,57 +2,66 @@ import streamlit as st
 import pandas as pd
 from streamlit_autorefresh import st_autorefresh
 
-# --- 1. CONFIG & HEARTBEAT ---
+# --- 1. CONFIG & AUTO-SYNC ---
 st.set_page_config(page_title="MLB Intelligence Engine", layout="wide")
-st_autorefresh(interval=60 * 1000, key="mlb_sync")
+# This auto-refreshes the dashboard every 60 seconds to catch your sheet updates
+st_autorefresh(interval=60 * 1000, key="mlb_sync_heartbeat")
 
-# --- 2. YOUR DATA SOURCE ---
-# Using the direct export link for your 'Model' tab
+# --- 2. YOUR SOURCE DATA ---
+# This is the direct ID from the link you provided
 SHEET_ID = '1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0'
+# We use the direct CSV export link to bypass Google's login screen
 url = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv'
 
-# --- 3. THE DATA ENGINE ---
+# --- 3. THE LIVE ENGINE ---
+st.title("⚾ MLB Intelligence Dashboard")
+st.caption(f"CONNECTED TO: 2026 MLB Model | Last Sync: {pd.Timestamp.now().strftime('%H:%M:%S')}")
+
 try:
-    # We skip the first 2 rows of your sheet to get to the real headers (Away Team, Home Team, etc.)
+    # CRITICAL: We skip exactly 2 rows so Python starts reading at 'Away Team'
     df = pd.read_csv(url, skiprows=2)
     
-    # Cleaning: Removing any empty rows or columns that often appear in export
-    df = df.dropna(how='all', axis=0).dropna(how='all', axis=1)
+    # We stop reading once we hit the empty rows before your 'Matchups' section
+    # This keeps the dashboard clean and focused only on the active model
+    df = df.iloc[:15] 
 
-    st.title("⚾ MLB Intelligence Dashboard")
-    st.caption(f"LIVE SYNC ACTIVE | Last Refresh: {pd.Timestamp.now().strftime('%H:%M:%S')}")
+    # Convert the columns you care about to numbers so we can color-code them
+    cols_to_fix = ['EV', 'Sharp', 'My Win%', 'Vegas Win%']
+    for col in cols_to_fix:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
     # --- 4. THE VISUAL BOARD ---
-    # Highlighting your EV Edge (e.g., Colorado at 21.08 or Pittsburgh at -68.69)
-    def highlight_ev(val):
+    # Highlighting the EV Edge (e.g., Pittsburgh at 21.08)
+    def color_coding(val):
         try:
             num = float(val)
+            # High-intensity green for the big edges you look for
             color = '#27ae60' if num > 12 else ('#c0392b' if num < -10 else '')
             return f'background-color: {color}; color: white'
         except:
             return ''
 
-    # We only show the columns you need for the decision
-    # These match your headers: 'Away Team', 'Home Team', 'EV', 'Sharp', etc.
+    # Selecting your primary decision metrics
     display_cols = ['Away Team', 'Home Team', 'Vegas Win%', 'My Win%', 'EV', 'Sharp']
-    # Filter for columns that actually exist in the data pull
-    final_cols = [c for c in display_cols if c in df.columns]
+    final_view = [c for c in display_cols if c in df.columns]
 
+    st.subheader("📋 Active Market Edge")
     st.dataframe(
-        df[final_cols].style.applymap(highlight_edge, subset=['EV'] if 'EV' in df.columns else []),
+        df[final_view].style.applymap(color_coding, subset=['EV'] if 'EV' in df.columns else []),
         use_container_width=True,
         hide_index=True
     )
 
-    # --- 5. ALERTS ---
-    # Calling out the Sharp action you've tracked (e.g., Colorado at 16.0% Sharps ML)
+    # --- 5. SHARP ALERTS ---
+    # This calls out the big moves, like the 16% Sharp action on Colorado
     if 'Sharp' in df.columns:
-        sharps = df[pd.to_numeric(df['Sharp'], errors='coerce').abs() > 15]
+        sharps = df[df['Sharp'].abs() > 15]
         if not sharps.empty:
             st.divider()
-            st.subheader("🔥 High-Priority Sharp Alerts")
+            st.subheader("🔥 Priority Sharp Alerts")
             for _, row in sharps.iterrows():
-                st.warning(f"**{row['Away Team']}**: {row['Sharp']}% Sharp Action Detected")
+                st.warning(f"**{row['Away Team']}**: {row['Sharp']}% Sharp Divergence")
 
 except Exception as e:
-    st.error(f"Sync Error: {e}. Ensure the sheet is still shared as 'Anyone with the link can view'.")
+    st.error(f"Waiting for Data... (Technical Note: {e})")
