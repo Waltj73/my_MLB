@@ -3,13 +3,13 @@ import pandas as pd
 
 # --- 1. DATA SYNC (Targeting "Model" Tab) ---
 SHEET_ID = '1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0'
-GID = '0' # Confirmed "Model" tab from image_1f6ff9.png
+GID = '0' 
 URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}'
 
 @st.cache_data(ttl=15)
 def load_data():
     try:
-        # Skip the first merged header row
+        # Skip the first merged header row to align with 'Away Team' / 'Home Team'
         df = pd.read_csv(URL, skiprows=1)
         df.columns = [str(c).strip() for c in df.columns]
         return df
@@ -18,61 +18,78 @@ def load_data():
         return pd.DataFrame()
 
 # --- 2. UI & TABLE GENERATION ---
-st.set_page_config(page_title="MLB Model Dashboard", layout="wide")
-st.title("⚾ 2026 MLB Tactical Board")
+st.set_page_config(page_title="MLB Sharp Analysis", layout="wide")
+st.title("⚾ MLB Sharp Analysis & Tactical Board")
 
 df = load_data()
 
 if not df.empty:
     try:
-        # Filter for rows with actual data in Column A (Away Team)
+        # Filter for rows with actual team data
         main_df = df[df.iloc[:, 0].notna() & (df.iloc[:, 0] != '0')].copy()
         
-        # 2. Map Columns based on image_1f6ff9.png
-        # A=0, B=1, E=4, F=5, S=18, T=19, W=22, X=23, Z=25, AA=26
+        # COLUMN MAPPING (Based on image_1f6ff9.png)
+        # N=13, O=14 (Sharps ML), P=15 (Sharp Dogs), W=22, X=23 (EV)
         display_table = pd.DataFrame({
             "Matchup": main_df.iloc[:, 0].astype(str) + " @ " + main_df.iloc[:, 1].astype(str),
-            "Vegas Odds (A/H)": main_df.iloc[:, 4].astype(str) + " / " + main_df.iloc[:, 5].astype(str),
-            "My Win % (A/H)": main_df.iloc[:, 18].astype(str) + " / " + main_df.iloc[:, 19].astype(str),
+            "Sharp ML (A/H)": main_df.iloc[:, 13].astype(str) + " / " + main_df.iloc[:, 14].astype(str),
+            "Sharp Target": main_df.iloc[:, 15].fillna('—'),
             "EV (Away)": main_df.iloc[:, 22],
             "EV (Home)": main_df.iloc[:, 23],
             "Picks": main_df.iloc[:, 25].fillna('') + " " + main_df.iloc[:, 26].fillna('')
         })
 
-        # 3. Apply Highlighting (Fixed Styler Method)
-        def highlight_ev(val):
-            try:
-                num = float(str(val).replace('%',''))
-                return 'background-color: #c6efce; color: #006100' if num > 0 else ''
-            except:
-                return ''
+        # --- SHARP FILTERING LOGIC ---
+        # Identify "Sharp Alignment" (When Sharp Target matches your Model Pick or high EV)
+        def to_n(v): return pd.to_numeric(str(v).replace('%','').strip(), errors='coerce')
 
-        st.subheader("Today's Projections")
-        # Use .map() instead of .applymap() for current Pandas versions
+        st.subheader("🎯 Sharp Money Movement")
+        
+        # Create columns for the summary cards
+        c1, c2, c3 = st.columns(3)
+        
+        # Logic for Sharp Alerts
+        sharp_alerts = []
+        for i, row in display_table.iterrows():
+            away_sharp = to_n(main_df.iloc[i, 13])
+            home_sharp = to_n(main_df.iloc[i, 14])
+            
+            # Identify games where sharps have > 5% movement or a specific dog is flagged
+            if abs(away_sharp) > 5 or abs(home_sharp) > 5 or row['Sharp Target'] != '—':
+                sharp_alerts.append(row)
+
+        c1.metric("Sharp Targets Identified", len([x for x in display_table['Sharp Target'] if x != '—']))
+        
+        # --- MAIN BOARD ---
+        st.divider()
+        def highlight_sharp(val):
+            return 'background-color: #d1e7ff; color: #004085; font-weight: bold' if val != '—' else ''
+
         st.dataframe(
-            display_table.style.map(highlight_ev, subset=['EV (Away)', 'EV (Home)']),
+            display_table.style.map(highlight_sharp, subset=['Sharp Target']),
             use_container_width=True,
-            height=600
+            height=500
         )
 
-        # 4. Notes & Tactical Alerts
-        st.divider()
-        st.subheader("📝 Tactical Notes")
+        # --- 3. TACTICAL BREAKDOWN ---
+        st.subheader("📝 Sharp vs. Model Alignment")
         
-        # Pull high EV matchups for quick review
-        high_edge = display_table[
-            (pd.to_numeric(display_table['EV (Away)'], errors='coerce') > 15) | 
-            (pd.to_numeric(display_table['EV (Home)'], errors='coerce') > 15)
-        ]
-        
-        if not high_edge.empty:
-            for _, row in high_edge.iterrows():
-                st.success(f"**Action Required**: {row['Matchup']} showing 15%+ EV. Verify starting lineups.")
+        if sharp_alerts:
+            for alert in sharp_alerts:
+                # Check if sharp target matches your pick column
+                is_aligned = alert['Sharp Target'] in alert['Picks'] if alert['Sharp Target'] != '—' else False
+                
+                with st.expander(f"Analysis: {alert['Matchup']}"):
+                    st.write(f"**Sharp Action**: {alert['Sharp ML (A/H)']}")
+                    st.write(f"**Flagged Dog**: {alert['Sharp Target']}")
+                    if is_aligned:
+                        st.success("✅ **Alignment**: Professional money is following the model's pick.")
+                    elif alert['Sharp Target'] != '—':
+                        st.warning("⚠️ **Conflict**: Sharps are on the opposite side of the model's projection.")
         else:
-            st.info("No extreme EV outliers detected. Proceed with standard model picks.")
+            st.write("No significant sharp discrepancies detected in the current feed.")
 
     except Exception as e:
-        st.error(f"Table Alignment Error: {e}")
-        st.write("Headers found in sheet:", list(df.columns))
+        st.error(f"Alignment Error: {e}")
 else:
-    st.info("🔄 Connecting to Model... Ensure the Google Sheet is shared.")
+    st.info("🔄 Connecting to Model...")
