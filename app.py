@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # ============================================================
-# DATA SYNC
+# DATA
 # ============================================================
 
 SHEET_ID = '1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0'
@@ -130,7 +130,7 @@ df = load_data()
 if df.empty:
 
     st.info(
-        "🔄 Syncing with Google Sheets..."
+        "🔄 Syncing..."
     )
 
     st.stop()
@@ -142,7 +142,6 @@ if df.empty:
 
 try:
 
-    # FIXED: reset index after removing blank rows
     main_df = df[
         df.iloc[:, 0]
         .astype(str)
@@ -171,76 +170,12 @@ try:
                 1
             ),
 
-        "Vegas Odds":
-
-            safe_get(
-                main_df,
-                "Vegas Away",
-                4
-            )
-
-            + " / " +
-
-            safe_get(
-                main_df,
-                "Vegas Home",
-                5
-            ),
-
-        "Sharp ML %":
-
-            safe_get(
-                main_df,
-                "Sharp ML Away",
-                13
-            )
-
-            + " / " +
-
-            safe_get(
-                main_df,
-                "Sharp ML Home",
-                14
-            ),
-
         "Sharp Dog":
 
             safe_get(
                 main_df,
                 "Sharp Dog",
                 15
-            ),
-
-        "My Win %":
-
-            safe_get(
-                main_df,
-                "My Win Away",
-                18
-            )
-
-            + " / " +
-
-            safe_get(
-                main_df,
-                "My Win Home",
-                19
-            ),
-
-        "EV (A/H)":
-
-            safe_get(
-                main_df,
-                "EV Away",
-                22
-            )
-
-            + " / " +
-
-            safe_get(
-                main_df,
-                "EV Home",
-                23
             ),
 
         "Model Pick":
@@ -316,13 +251,13 @@ try:
     )
 
     # ========================================================
-    # METRICS
+    # TOP METRICS
     # ========================================================
 
     c1, c2, c3, c4 = st.columns(4)
 
     c1.metric(
-        "Total Games",
+        "Games",
         len(master_table)
     )
 
@@ -332,85 +267,53 @@ try:
     )
 
     c3.metric(
-        "High EV Edges",
+        "High EV",
         high_ev_mask.sum()
     )
 
     c4.metric(
-        "Market Status",
+        "Market",
         "LIVE"
     )
 
     # ========================================================
-    # TACTICAL BOARD
+    # TABS
     # ========================================================
 
-    st.subheader(
-        "Tactical Board"
-    )
+    board_tab, sharp_tab, ev_tab, signal_tab, notes_tab = st.tabs([
 
-    def highlight_logic(row):
+        "📋 Tactical Board",
+        "🔥 Sharp Money",
+        "📈 High EV",
+        "🎯 Signal Plays",
+        "🔍 Field Notes"
 
-        styles = [''] * len(row)
-
-        if str(
-            row["Sharp Dog"]
-        ).strip():
-
-            styles[3] = (
-                "background-color:#d1e7ff;"
-                "font-weight:bold"
-            )
-
-        if str(
-            row["Model Pick"]
-        ).strip():
-
-            styles[6] = (
-                "background-color:#c6efce;"
-                "font-weight:bold"
-            )
-
-        return styles
-
-
-    st.dataframe(
-
-        master_table
-        .style
-        .apply(
-            highlight_logic,
-            axis=1
-        ),
-
-        use_container_width=True,
-        height=700,
-        hide_index=True
-    )
+    ])
 
     # ========================================================
-    # DETAILED OUTLOOK
+    # BOARD
     # ========================================================
 
-    st.divider()
+    with board_tab:
 
-    st.subheader(
-        "📝 Detailed Tactical Outlook"
-    )
-
-    left, right = st.columns(2)
-
-    # ========================================================
-    # SHARP ALIGNMENT
-    # ========================================================
-
-    with left:
-
-        st.markdown(
-            "#### 🔥 Top Sharp Bets & Alignments"
+        st.dataframe(
+            master_table,
+            use_container_width=True,
+            hide_index=True,
+            height=700
         )
 
-        for _, row in master_table.iterrows():
+    # ========================================================
+    # SHARP TAB
+    # ========================================================
+
+    with sharp_tab:
+
+        st.subheader(
+            "🔥 Sharp Money Targets"
+        )
+
+        for idx, row in master_table.iterrows():
 
             sharp_team = normalize_team(
                 row["Sharp Dog"]
@@ -420,58 +323,53 @@ try:
 
                 continue
 
-            model_pick = normalize_team(
-
+            model_team = normalize_team(
                 first_word(
                     row["Model Pick"]
                 )
             )
 
-            if (
-
-                model_pick
-
+            aligned = (
+                sharp_team
                 and
+                sharp_team == model_team
+            )
 
-                sharp_team == model_pick
-
-            ):
+            if aligned:
 
                 st.success(
 
-                    f"**ALIGNED**: "
-
                     f"{row['Matchup']} → "
 
-                    f"Sharps + Model on "
+                    f"{sharp_team} "
 
-                    f"**{sharp_team}**"
+                    f"(Sharps + Model)"
                 )
 
             else:
 
                 st.warning(
 
-                    f"**SHARP BIAS**: "
-
                     f"{row['Matchup']} → "
 
-                    f"Sharps on "
+                    f"{sharp_team} "
 
-                    f"**{sharp_team}**"
+                    f"(Sharp Only)"
                 )
 
     # ========================================================
-    # HIGH EV
+    # EV TAB
     # ========================================================
 
-    with right:
+    with ev_tab:
 
-        st.markdown(
-            "#### 📈 High EV Model Picks"
+        st.subheader(
+            "📈 High EV Model Plays"
         )
 
-        for idx in range(len(main_df)):
+        for idx in range(
+            len(main_df)
+        ):
 
             if not high_ev_mask.iloc[idx]:
 
@@ -487,64 +385,11 @@ try:
                 ev_home.iloc[idx]
             )
 
-            away_team = (
-                row["Matchup"]
-                .split("@")[0]
-                .strip()
+            edge_ev = max(
+                away_ev or -999,
+                home_ev or -999
             )
 
-            home_team = (
-                row["Matchup"]
-                .split("@")[1]
-                .strip()
-            )
-
-            if (
-
-                away_ev is not None
-
-                and
-
-                (
-                    home_ev is None
-                    or away_ev >= home_ev
-                )
-
-            ):
-
-                edge_team = away_team
-                edge_ev = away_ev
-
-                vegas_line = safe_get(
-                    main_df,
-                    "Vegas Away",
-                    4
-                ).iloc[idx]
-
-                win_pct = safe_get(
-                    main_df,
-                    "My Win Away",
-                    18
-                ).iloc[idx]
-
-            else:
-
-                edge_team = home_team
-                edge_ev = home_ev
-
-                vegas_line = safe_get(
-                    main_df,
-                    "Vegas Home",
-                    5
-                ).iloc[idx]
-
-                win_pct = safe_get(
-                    main_df,
-                    "My Win Home",
-                    19
-                ).iloc[idx]
-
-            # Grade
             if edge_ev >= 20:
 
                 tier = "🟢 ELITE"
@@ -557,6 +402,37 @@ try:
 
                 tier = "🟡 VALUE"
 
+            st.info(
+
+                f"{tier} → "
+
+                f"{row['Matchup']} "
+
+                f"({edge_ev:.2f}%)"
+            )
+
+    # ========================================================
+    # SIGNAL TAB
+    # ========================================================
+
+    with signal_tab:
+
+        st.subheader(
+            "🎯 Signal Plays"
+        )
+
+        signal_found = False
+
+        for idx in range(
+            len(main_df)
+        ):
+
+            if not high_ev_mask.iloc[idx]:
+
+                continue
+
+            row = master_table.iloc[idx]
+
             sharp_team = normalize_team(
                 row["Sharp Dog"]
             )
@@ -567,7 +443,7 @@ try:
                 )
             )
 
-            aligned = (
+            if (
 
                 sharp_team
 
@@ -575,61 +451,77 @@ try:
 
                 sharp_team == model_team
 
-            )
-
-            signal = (
-
-                "Sharps + Model"
-
-                if aligned
-
-                else "Model Only"
-
-            )
-
-            st.info(
-
-                f"""
-**{tier} EDGE** — {row['Matchup']}
-
-**Model Pick:** {row['Model Pick']}  
-**Edge Side:** {edge_team}  
-**Expected Value:** {edge_ev:.2f}%  
-**Vegas Line:** {vegas_line}  
-**Model Win %:** {win_pct}  
-**Signal:** {signal}
-"""
-            )
-
-    # ========================================================
-    # FIELD NOTES
-    # ========================================================
-
-    st.divider()
-
-    st.subheader(
-        "🔍 Individual Game Intel"
-    )
-
-    for _, row in master_table.iterrows():
-
-        note = str(
-            row["Tactical Note"]
-        ).strip()
-
-        if len(note) > 3:
-
-            with st.expander(
-
-                f"Field Note: "
-
-                f"{row['Matchup']}"
-
             ):
 
-                st.write(
-                    note
+                signal_found = True
+
+                edge_ev = max(
+
+                    to_n(
+                        ev_away.iloc[idx]
+                    ) or -999,
+
+                    to_n(
+                        ev_home.iloc[idx]
+                    ) or -999
+
                 )
+
+                if edge_ev >= 20:
+
+                    st.success(
+
+                        f"🟢 ELITE SIGNAL → "
+
+                        f"{row['Matchup']} "
+
+                        f"→ {model_team} "
+
+                        f"({edge_ev:.2f}%)"
+                    )
+
+                else:
+
+                    st.info(
+
+                        f"🎯 SIGNAL → "
+
+                        f"{row['Matchup']} "
+
+                        f"→ {model_team} "
+
+                        f"({edge_ev:.2f}%)"
+                    )
+
+        if not signal_found:
+
+            st.warning(
+                "No signal plays found."
+            )
+
+    # ========================================================
+    # NOTES
+    # ========================================================
+
+    with notes_tab:
+
+        for _, row in master_table.iterrows():
+
+            note = str(
+                row["Tactical Note"]
+            ).strip()
+
+            if len(note) > 3:
+
+                with st.expander(
+
+                    f"{row['Matchup']}"
+
+                ):
+
+                    st.write(
+                        note
+                    )
 
 
 except Exception as e:
