@@ -2,63 +2,59 @@ import streamlit as st
 import pandas as pd
 from streamlit_autorefresh import st_autorefresh
 
-# --- 1. CONFIG & AUTO-SYNC ---
-st.set_page_config(page_title="MLB Intelligence Engine", layout="wide")
-st_autorefresh(interval=60 * 1000, key="mlb_sync_fix")
+# --- 1. CONFIG ---
+st.set_page_config(page_title="Institutional Edge Scanner", layout="wide")
+st_autorefresh(interval=60 * 1000, key="edge_scanner")
 
-# --- 2. YOUR SOURCE DATA ---
+# --- 2. THE DATA SOURCE ---
 SHEET_ID = '1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0'
-url = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv'
+# Target the 'Matchups' tab specifically
+url = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Matchups'
 
-# --- 3. THE LIVE ENGINE ---
-st.title("⚾ MLB Intelligence Dashboard")
-st.caption(f"SYNC ACTIVE | Last Refresh: {pd.Timestamp.now().strftime('%H:%M:%S')}")
+st.title("🏹 Institutional Edge Scanner")
+st.caption(f"Targeting: Matchups Tab | Live Sync: {pd.Timestamp.now().strftime('%H:%M:%S')}")
 
 try:
-    # Skip the top labels to get to 'Away Team' and 'Home Team'
-    df = pd.read_csv(url, skiprows=2)
+    # Read and clean the Matchups data
+    df = pd.read_csv(url)
     
-    # Isolate the active model rows (top 15)
-    df = df.iloc[:15].copy() 
+    # We find the core columns: Away Team, Home Team, EV, and Sharp
+    # We filter only for games that meet your 'Professional' thresholds
+    df['EV_Num'] = pd.to_numeric(df['EV'], errors='coerce').fillna(0)
+    df['Sharp_Num'] = pd.to_numeric(df['Sharp'], errors='coerce').fillna(0)
 
-    # Clean numeric columns for your EV and Sharp calculations
-    cols_to_fix = ['EV', 'Sharp', 'My Win%', 'Vegas Win%']
-    for col in cols_to_fix:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    # LOGIC: The "High Conviction" Signal
+    # Only show games where:
+    # 1. EV is over 12 (Your Model Edge)
+    # 2. Sharp Action is over 10% (Market Confirmation)
+    high_conviction = df[(df['EV_Num'].abs() > 12) & (df['Sharp_Num'].abs() > 10)].copy()
 
-    # --- 4. THE VISUAL BOARD ---
-    def color_coding(val):
-        try:
-            num = float(val)
-            # High-intensity green for edges > 12
-            color = '#27ae60' if num > 12 else ('#c0392b' if num < -10 else '')
-            return f'background-color: {color}; color: white'
-        except:
-            return ''
+    if not high_conviction.empty:
+        st.subheader("🔥 High Conviction Signals")
+        st.write("Alignment between Model EV and Sharp Money detected.")
+        
+        # We calculate a 'Conviction Score' (EV + Sharp strength)
+        high_conviction['Conviction'] = (high_conviction['EV_Num'].abs() + high_conviction['Sharp_Num'].abs()) / 2
+        
+        # Displaying only the "Action" items
+        display = high_conviction[['Away Team', 'Home Team', 'EV', 'Sharp', 'Conviction']]
+        
+        st.dataframe(
+            display.style.background_gradient(cmap='Greens', subset=['Conviction']),
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("Scanning for institutional flow... No high-conviction alignments found at this moment.")
 
-    # Filter for your decision metrics
-    display_cols = ['Away Team', 'Home Team', 'Vegas Win%', 'My Win%', 'EV', 'Sharp']
-    final_view = [c for c in display_cols if c in df.columns]
-
-    st.subheader("📋 Active Market Edge")
-    
-    # FIXED LINE: Changed .applymap to .map for newer Pandas versions
-    st.dataframe(
-        df[final_view].style.map(color_coding, subset=['EV'] if 'EV' in df.columns else []),
-        use_container_width=True,
-        hide_index=True
-    )
-
-    # --- 5. SHARP ALERTS ---
-    # Tracking moves like the 16% Sharp action on Colorado
-    if 'Sharp' in df.columns:
-        sharps = df[df['Sharp'].abs() > 15]
-        if not sharps.empty:
-            st.divider()
-            st.subheader("🔥 Priority Sharp Alerts")
-            for _, row in sharps.iterrows():
-                st.warning(f"**{row['Away Team']}**: {row['Sharp']}% Sharp Divergence")
+    # --- 3. SYSTEM ALERTS ---
+    # Instant notification if a 'Sharp' move hits your 15% threshold
+    extreme_moves = df[df['Sharp_Num'].abs() >= 15]
+    if not extreme_moves.empty:
+        st.divider()
+        st.subheader("⚠️ Extreme Sharp Alerts")
+        for _, row in extreme_moves.iterrows():
+            st.error(f"**{row['Away Team']}**: {row['Sharp']}% Sharp Action (Extreme Divergence)")
 
 except Exception as e:
-    st.error(f"Sync Status: Connection Pending... ({e})")
+    st.error(f"Searching for data in Matchups... {e}")
