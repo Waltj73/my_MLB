@@ -2,13 +2,12 @@ import streamlit as st
 import pandas as pd
 from streamlit_autorefresh import st_autorefresh
 
-# --- 1. CONFIG ---
+# --- 1. SETUP ---
 st.set_page_config(page_title="MLB Betting Edge", layout="wide")
 st_autorefresh(interval=60 * 1000, key="vsin_update")
 
-# --- 2. DATA ENGINE ---
+# --- 2. DATA (Hard-coded to match your image_2e7fb4.png exactly) ---
 def fetch_live_data():
-    # Matches the May 13 slate from image_2e7fb4.png
     data = {
         "Away Team": ["Washington", "Colorado", "Chi Cubs", "San Diego", "SF Giants", "LA Angels", "Tampa Bay", "Kansas City", "NY Yankees", "Seattle", "Philadelphia", "Detroit", "Miami", "Arizona", "St. Louis"],
         "Home Team": ["Cincinnati", "Pittsburgh", "Atlanta", "Milwaukee", "LA Dodgers", "Cleveland", "Toronto", "Chi Sox", "Baltimore", "Houston", "Boston", "NY Mets", "Minnesota", "Texas", "Sacramento"],
@@ -20,45 +19,62 @@ def fetch_live_data():
     }
     return pd.DataFrame(data)
 
-# --- 3. LOGIC (Matching image_2e7fb4.png exactly) ---
+# --- 3. THE "WALT JOHNSON" ENGINE ---
 df = fetch_live_data()
 df['My Win% Home'] = 100 - df['My Win% Away']
 
-# Sharp ML = Handle% - Bets%
+# Sharps ML Logic (Column H & N)
 df['Sharps ML Away'] = (df['Handle% Away'] - df['Bets% Away']) / 100
 df['Sharps ML Home'] = -df['Sharps ML Away']
 
-# EV Calculation
-def get_ev(win_pct, ml):
+# EV Logic (Column V & W)
+def calc_ev(win_pct, ml):
     payout = ml/100 if ml > 0 else 100/abs(ml)
     return (win_pct/100 * payout * 100) - (100 - win_pct)
 
-df['EV Away'] = df.apply(lambda x: get_ev(x['My Win% Away'], x['Vegas ML Away']), axis=1)
-df['EV Home'] = df.apply(lambda x: get_ev(x['My Win% Home'], x['Vegas ML Home']), axis=1)
+df['EV Away'] = df.apply(lambda x: calc_ev(x['My Win% Away'], x['Vegas ML Away']), axis=1)
+df['EV Home'] = df.apply(lambda x: calc_ev(x['My Win% Home'], x['Vegas ML Home']), axis=1)
 
-# Sharp Dogs Logic (Column P)
-def get_sharp_dog(row):
-    if row['Vegas ML Away'] > 100 and row['Sharps ML Away'] > 0.10: return row['Away Team']
-    if row['Vegas ML Home'] > 100 and row['Sharps ML Home'] > 0.10: return row['Home Team']
-    return ""
-df['Sharp Dogs'] = df.apply(get_sharp_dog, axis=1)
+# Difference Logic (Column U & V)
+df['Diff Away'] = df['My Win% Away'] - (100 / ( (df['Vegas ML Away']/100 if df['Vegas ML Away']>0 else 100/abs(df['Vegas ML Away'])) + 1))
+df['Diff Home'] = df['My Win% Home'] - (100 / ( (df['Vegas ML Home']/100 if df['Vegas ML Home']>0 else 100/abs(df['Vegas ML Home'])) + 1))
 
-# Picks Logic (Columns Y & Z)
+# Picks (Column Y & Z)
 df['Pick Away'] = df.apply(lambda x: x['Away Team'] if x['EV Away'] > 12 else "", axis=1)
 df['Pick Home'] = df.apply(lambda x: x['Home Team'] if x['EV Home'] > 12 else "", axis=1)
 
-# --- 4. UI ---
-st.title("⚾ MLB Betting Edge: Sheet Sync")
+# --- 4. STYLING (The "Sheet Look") ---
+def highlight_cols(x):
+    # Match the green/red shading from image_2e7fb4.png
+    style_df = pd.DataFrame('', index=x.index, columns=x.columns)
+    
+    # EV & Diff Highlighting
+    for col in ['EV Away', 'EV Home', 'Diff Away', 'Diff Home']:
+        style_df[col] = x[col].apply(lambda v: 'background-color: #2ecc71' if v > 10 else ('background-color: #f1948a' if v < -10 else ''))
+    
+    # Picks Column Highlighting
+    for col in ['Pick Away', 'Pick Home']:
+        style_df[col] = x[col].apply(lambda v: 'background-color: #16a085; color: white; font-weight: bold' if v != "" else '')
+        
+    return style_df
 
-# Formatting matching the spreadsheet
-st.header("📋 Sync'd Full Slate")
-st.dataframe(df[['Away Team', 'Home Team', 'Sharps ML Away', 'Sharps ML Home', 'Sharp Dogs', 'EV Away', 'EV Home', 'Pick Away', 'Pick Home']])
+# --- 5. THE OUTPUT ---
+st.title("⚾ MLB Betting Dashboard")
+
+# Display as one massive, styled spreadsheet
+st.dataframe(
+    df[['Away Team', 'Home Team', 'Sharps ML Away', 'Sharps ML Home', 'EV Away', 'EV Home', 'Diff Away', 'Diff Home', 'Pick Away', 'Pick Home']]
+    .style.apply(highlight_cols, axis=None),
+    use_container_width=True,
+    height=600,
+    hide_index=True
+)
 
 st.divider()
 
-# Bottom Scouting Reports
-st.header("📝 Sharp Scouting Reports")
-top_plays = df[(df['Pick Away'] != "") | (df['Pick Home'] != "")]
-for _, row in top_plays.iterrows():
-    pick = row['Pick Away'] if row['Pick Away'] != "" else row['Pick Home']
-    st.info(f"**{pick}**: High EV edge detected. Sharp Handle suggests institutional backing.")
+# Only keep the notes in a very small section at the bottom
+st.subheader("📝 Quick Sharp Notes")
+sharp_dogs = df[((df['Vegas ML Away'] > 100) & (df['Sharps ML Away'] > 0.10)) | ((df['Vegas ML Home'] > 100) & (df['Sharps ML Home'] > 0.10))]
+for _, row in sharp_dogs.iterrows():
+    dog = row['Away Team'] if row['Vegas ML Away'] > 0 else row['Home Team']
+    st.caption(f"**Sharp Dog Alert:** {dog} showing institutional support vs. market price.")
