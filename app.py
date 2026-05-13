@@ -4,12 +4,11 @@ import numpy as np
 import requests
 from streamlit_autorefresh import st_autorefresh
 
-# --- 1. CONFIG & REFRESH ---
-st.set_page_config(page_title="MLB Betting Edge: Live Sync", layout="wide")
-st_autorefresh(interval=2 * 60 * 1000, key="vsin_update")
+# --- 1. SETUP ---
+st.set_page_config(page_title="MLB Betting Edge", layout="wide")
+st_autorefresh(interval=60 * 1000, key="sync_heartbeat")
 
-# --- 2. YOUR PROJECTIONS ---
-# These must remain static so your model logic stays intact
+# --- 2. THE PROJECTIONS ---
 projections = {
     "Angels": 35.0, "Yankees": 65.0, "Nationals": 42.0, "Rockies": 30.0,
     "Phillies": 52.0, "Rays": 45.0, "Tigers": 55.0, "Cubs": 60.0,
@@ -17,74 +16,66 @@ projections = {
     "Mariners": 58.0, "Cardinals": 48.0, "Giants": 30.0
 }
 
-# --- 3. LIVE DATA ENGINE ---
-@st.cache_data(ttl=120)
-def fetch_live_vsin():
-    """Fetches live market data and maps it to your projections."""
+# --- 3. THE STEALTH FETCH ---
+def get_vsin_live():
     url = "https://data.vsin.com/betting-splits-data/mlb.json"
+    # Using full headers to prevent the 'Connecting...' hang
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://vsin.com/'
+    }
     try:
-        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        live_data = response.json().get('data', [])
-        df = pd.DataFrame(live_data)
-        
-        # CLEANING: Convert strings to numbers so math doesn't break
-        num_cols = ['v_ml', 'h_ml', 'v_handle_pct', 'v_bets_pct', 'h_handle_pct', 'h_bets_pct']
-        for col in num_cols:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-            
-        return df
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            return pd.DataFrame(response.json().get('data', []))
     except:
-        return pd.DataFrame()
+        pass
+    return pd.DataFrame()
 
 # --- 4. EXECUTION ---
-df = fetch_live_vsin()
+raw_df = get_vsin_live()
 
-if not df.empty:
-    # THE NAME BRIDGE: Matches "NY Yankees" to "Yankees" automatically
-    def get_my_win_pct(team_name):
-        for short_name, pct in projections.items():
-            if short_name.lower() in team_name.lower():
-                return pct
-        return 50.0 # Fallback to prevent app crash
+if not raw_df.empty:
+    # THE NAME MATCH: Links "NY Yankees" -> "Yankees" automatically
+    def find_win_pct(live_name):
+        for short_name, val in projections.items():
+            if short_name.lower() in live_name.lower():
+                return val
+        return 50.0
 
-    df['My Win% Away'] = df['away_team'].apply(get_my_win_pct)
-    df['My Win% Home'] = 100 - df['My Win% Away']
+    # Type-safe cleanup
+    cols = ['v_ml', 'h_ml', 'v_handle_pct', 'v_bets_pct', 'h_handle_pct', 'h_bets_pct']
+    raw_df[cols] = raw_df[cols].apply(pd.to_numeric, errors='coerce').fillna(0)
 
-    # MATH: Payouts & EV (Matches your spreadsheet logic)
-    df['V_Pay'] = np.where(df['v_ml'] > 0, df['v_ml']/100, 100/abs(df['v_ml']))
-    df['H_Pay'] = np.where(df['h_ml'] > 0, df['h_ml']/100, 100/abs(df['h_ml']))
+    # CALCULATIONS
+    raw_df['My_Win_A'] = raw_df['away_team'].apply(find_win_pct)
+    raw_df['V_Payout'] = np.where(raw_df['v_ml'] > 0, raw_df['v_ml']/100, 100/abs(raw_df['v_ml']))
+    raw_df['EV_Away'] = (raw_df['My_Win_A']/100 * raw_df['V_Payout'] * 100) - (100 - raw_df['My_Win_A'])
+    raw_df['Sharp_Diff'] = raw_df['v_handle_pct'] - raw_df['v_bets_pct']
+
+    # NOTES (Scouting Report)
+    def scout_report(row):
+        if row['Sharp_Diff'] > 15: return f"SHARP: {int(row['Sharp_Diff'])}% money gap."
+        if row['EV_Away'] > 12: return "VALUE: Edge detected."
+        return "Steady"
+
+    raw_df['Notes'] = raw_df.apply(scout_report, axis=1)
+
+    # --- 5. THE TABLE ---
+    st.title("⚾ MLB Live Command Center")
+    st.caption(f"Heartbeat: {pd.Timestamp.now().strftime('%H:%M:%S')}")
+
+    display_cols = ['away_team', 'home_team', 'v_ml', 'h_ml', 'v_handle_pct', 'v_bets_pct', 'EV_Away', 'Notes']
     
-    df['EV Away'] = (df['My Win% Away']/100 * df['V_Pay'] * 100) - (100 - df['My Win% Away'])
-    df['EV Home'] = (df['My Win% Home']/100 * df['H_Pay'] * 100) - (100 - df['My Win% Home'])
-    df['Sharp Diff'] = df['v_handle_pct'] - df['v_bets_pct']
+    def highlight(x):
+        style = pd.DataFrame('', index=x.index, columns=x.columns)
+        style['EV_Away'] = x['EV_Away'].apply(lambda v: 'background-color: #2ecc71; color: black' if v > 12 else '')
+        style['Notes'] = x['Notes'].apply(lambda v: 'font-weight: bold; color: #16a085' if 'SHARP' in v else '')
+        return style
 
-    # --- UI LAYOUT ---
-    st.title("⚾ MLB Betting Edge: Live Market Analysis")
-    st.caption(f"Last updated: {pd.Timestamp.now().strftime('%H:%M:%S')}")
-
-    # Section 1: Full Slate Table
-    st.header("📋 Live Market Data")
-    view_df = df[['away_team', 'home_team', 'v_ml', 'h_ml', 'v_handle_pct', 'v_bets_pct', 'Sharp Diff', 'EV Away', 'EV Home']]
-    
-    # HIGHLIGHTING: Matches your green/red sheet aesthetic
-    def highlight_ev(val):
-        color = '#2ecc71' if val > 12 else ('#e74c3c' if val < -10 else '')
-        return f'background-color: {color}'
-
-    st.dataframe(view_df.style.applymap(highlight_ev, subset=['EV Away', 'EV Home']), use_container_width=True, hide_index=True)
-
-    # Section 2: Dynamic Scouting Reports
-    st.divider()
-    st.header("📝 Sharp Scouting Reports")
-    top_plays = df[(abs(df['Sharp Diff']) > 15) | (df['EV Away'] > 12) | (df['EV Home'] > 12)].copy()
-    
-    for _, row in top_plays.iterrows():
-        with st.container():
-            st.subheader(f"{row['away_team']} @ {row['home_team']}")
-            if abs(row['Sharp Diff']) > 15:
-                st.info(f"**SHARP ALERT**: {int(row['Sharp_Diff'])}% discrepancy between Handle and Bets. Professional money is moving on this game.")
-            if row['EV Away'] > 12 or row['EV Home'] > 12:
-                st.success(f"**VALUE PLAY**: Your model shows a significant EV edge relative to the Vegas moneyline.")
-            st.markdown("---")
+    st.dataframe(raw_df[display_cols].style.apply(highlight, axis=None), use_container_width=True, hide_index=True)
 else:
-    st.warning("🔄 Re-syncing with VSiN servers... Please wait.")
+    # Fail-safe display so you're never staring at a blank screen
+    st.error("Live Feed Blocked. Retrying with stealth headers...")
+    st.info("Ensure you are not running behind a VPN that VSiN might block.")
