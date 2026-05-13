@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from scipy.stats import poisson
 
-# --- 1. CORE MATH ENGINE (Poisson & EV) ---
+# --- 1. CORE MATH ENGINE ---
 def calculate_poisson_win_prob(away_lambda, home_lambda):
     if pd.isna(away_lambda) or pd.isna(home_lambda) or away_lambda <= 0 or home_lambda <= 0:
         return 0.50
@@ -19,7 +19,7 @@ def calculate_ev(win_prob, ml_odds):
     dec = (ml_odds / 100) + 1 if ml_odds > 0 else (100 / abs(ml_odds)) + 1
     return (win_prob * (dec - 1)) - (1 - win_prob)
 
-# --- 2. LIVE SYNC ENGINE ---
+# --- 2. THE HARDENED SYNC ENGINE ---
 SHEET_ID = '1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0'
 GID = '1240994733'
 URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}'
@@ -27,9 +27,22 @@ URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=
 @st.cache_data(ttl=30)
 def load_live_slate():
     try:
-        df = pd.read_csv(URL)
+        # Step A: Load the raw data
+        raw_df = pd.read_csv(URL, header=None)
+        
+        # Step B: Deep-Scan for the Header Row
+        # This finds the row that actually contains "Away" or "Home"
+        header_row_index = 0
+        for i, row in raw_df.iterrows():
+            row_str = row.astype(str).str.lower().tolist()
+            if any("away" in s for s in row_str) and any("home" in s for s in row_str):
+                header_row_index = i
+                break
+        
+        # Step C: Re-load with the correct header location
+        df = pd.read_csv(URL, skiprows=header_row_index)
         df.columns = [str(c).strip().replace('"', '') for c in df.columns]
-        return df
+        return df.dropna(subset=[df.columns[0]]) # Remove empty rows at the bottom
     except Exception as e:
         st.error(f"Sync Interrupted: {e}")
         return pd.DataFrame()
@@ -41,13 +54,13 @@ st.title("⚾ MLB Tactical Command Center")
 df = load_live_slate()
 
 if not df.empty:
-    # Helper to find columns by keywords to prevent crashes
+    # helper to find columns by keywords
     def find_col(keywords):
         for col in df.columns:
             if any(k.lower() in col.lower() for k in keywords): return col
         return None
 
-    # Safe Data Extraction
+    # Column Mapping
     c_away = find_col(['Away'])
     c_home = find_col(['Home'])
     c_a_est = find_col(['Away EST', 'A_EST'])
@@ -56,15 +69,20 @@ if not df.empty:
     c_hnd = find_col(['HandleHND.2', 'Handle', 'HND'])
     c_bet = find_col(['BetsBET.2', 'Bets', 'BET'])
 
-    # Calculation with Crash Protection
+    # Final Verification before processing
+    if not c_away or not c_home:
+        st.error("Could not find 'Away' or 'Home' columns. Check your spreadsheet headers.")
+        st.stop()
+
     def clean_num(val):
         return pd.to_numeric(str(val).replace('%','').strip(), errors='coerce')
 
+    # Data Processing
     df['Win_Prob'] = df.apply(lambda x: calculate_poisson_win_prob(clean_num(x.get(c_a_est, 0)), clean_num(x.get(c_h_est, 0))), axis=1)
     df['EV'] = df.apply(lambda x: calculate_ev(x['Win_Prob'], clean_num(x.get(c_ml, 0))), axis=1)
     df['Sharp_Diff'] = clean_num(df.get(c_hnd, 0)) - clean_num(df.get(c_bet, 0))
 
-    # Matchup Selector
+    # Matchup Selection
     game_list = (df[c_away].astype(str) + " @ " + df[c_home].astype(str)).tolist()
     selected_game = st.selectbox("🎯 Select Matchup", game_list)
     g = df[(df[c_away].astype(str) + " @ " + df[c_home].astype(str)) == selected_game].iloc[0]
@@ -83,8 +101,8 @@ if not df.empty:
     with l:
         st.subheader("🎯 Tactical Notes")
         st.write(f"Projections: **{g.get(c_a_est)}** vs **{g.get(c_h_est)}**")
-        if g['EV'] > 0.08: st.success(f"**Value Alert**: High EV detected on {g[c_away]}.")
-        elif g['EV'] < -0.08: st.warning(f"**Overvalued**: Market price exceeds model projections.")
+        if g['EV'] > 0.08: st.success("**Value Alert**: High EV detected.")
+        elif g['EV'] < -0.08: st.warning("**Overvalued**: Market price exceeds model.")
 
     with r:
         st.subheader("🐳 Institutional Flow")
