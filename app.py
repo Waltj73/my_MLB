@@ -5,7 +5,7 @@ from scipy.stats import poisson
 import cloudscraper
 import io
 
-# --- 1. THE POISSON ENGINE (Your Precise Excel Math) ---
+# --- 1. THE POISSON ENGINE ---
 def calculate_poisson_win_prob(away_lambda, home_lambda):
     if pd.isna(away_lambda) or pd.isna(home_lambda) or away_lambda <= 0:
         return 0.50 
@@ -18,73 +18,71 @@ def calculate_poisson_win_prob(away_lambda, home_lambda):
     p_home = np.sum(home_pmf * away_cdf)
     return p_away / (p_away + p_home)
 
-# --- 2. THE AGGRESSIVE SCRAPER ---
+def calculate_ev(win_prob, ml_odds):
+    if pd.isna(ml_odds): return 0
+    dec = (ml_odds / 100) + 1 if ml_odds > 0 else (100 / abs(ml_odds)) + 1
+    return (win_prob * (dec - 1)) - (1 - win_prob)
+
+# --- 2. MULTI-TABLE SCRAPER ---
 @st.cache_data(ttl=300)
-def fetch_vsin_data():
+def fetch_multi_table_data():
     scraper = cloudscraper.create_scraper()
+    all_game_data = []
+    
     try:
         url = "https://data.vsin.com/betting-splits/?source=DK&sport=MLB"
         response = scraper.get(url, timeout=10)
-        # We read all tables and search for the one with 'EST' or 'Score'
         tables = pd.read_html(io.StringIO(response.text), flavor='lxml')
         
-        main_df = None
         for t in tables:
-            cols = [str(c).lower() for c in t.columns]
-            if any('est' in c or 'score' in c for c in cols):
-                main_df = t
-                break
+            # Flatten columns to look for markers
+            col_list = [str(c).lower() for c in t.columns]
+            
+            # Check if this table contains game data markers
+            if any('est' in c or 'score' in c for c in col_list):
+                try:
+                    # In these small game tables, Away is row 0, Home is row 1
+                    # We find the column index for EST Score and MoneyML dynamically
+                    idx_est = next(i for i, c in enumerate(col_list) if 'est' in c)
+                    idx_ml = next(i for i, c in enumerate(col_list) if 'money' in c or 'ml' in c)
+                    idx_team = next(i for i, c in enumerate(col_list) if 'team' in c or 'matchup' in c or i == 1)
+                    
+                    game = {
+                        'Away': t.iloc[0, idx_team],
+                        'Home': t.iloc[1, idx_team],
+                        'Away_Proj': pd.to_numeric(t.iloc[0, idx_est], errors='coerce'),
+                        'Home_Proj': pd.to_numeric(t.iloc[1, idx_est], errors='coerce'),
+                        'Away_ML': pd.to_numeric(t.iloc[0, idx_ml], errors='coerce'),
+                        'Home_ML': pd.to_numeric(t.iloc[1, idx_ml], errors='coerce')
+                    }
+                    all_game_data.append(game)
+                except Exception:
+                    continue # Skip tables that don't match the format
         
-        if main_df is None: return pd.DataFrame()
-
-        # Step 3: Unstacking the 'EST Score' and 'MoneyML' rows
-        # VSiN lists Away on Row 0, Home on Row 1 for every game
-        away_rows = main_df.iloc[::2].reset_index(drop=True)
-        home_rows = main_df.iloc[1::2].reset_index(drop=True)
-
-        # Dynamic mapping based on column keywords
-        def find_col(keywords):
-            for i, col in enumerate(main_df.columns):
-                if any(k.lower() in str(col).lower() for k in keywords): return i
-            return None
-
-        idx_est = find_col(['est', 'score'])
-        idx_ml = find_col(['money', 'ml'])
-        idx_team = find_col(['team', 'matchup'])
-
-        matchups = pd.DataFrame({
-            'Away': away_rows.iloc[:, idx_team],
-            'Home': home_rows.iloc[:, idx_team],
-            'Away_Proj': pd.to_numeric(away_rows.iloc[:, idx_est], errors='coerce'),
-            'Home_Proj': pd.to_numeric(home_rows.iloc[:, idx_est], errors='coerce'),
-            'Away_ML': pd.to_numeric(away_rows.iloc[:, idx_ml], errors='coerce'),
-            'Home_ML': pd.to_numeric(home_rows.iloc[:, idx_ml], errors='coerce')
-        })
-        return matchups.dropna(subset=['Away_Proj'])
+        return pd.DataFrame(all_game_data)
     except Exception as e:
-        st.error(f"Scraper Error: {e}")
+        st.error(f"Error accessing tables: {e}")
         return pd.DataFrame()
 
-# --- 3. UI DISPLAY ---
-st.set_page_config(page_title="MLB Automation", layout="wide")
-st.title("⚾ MLB Automated Tactical Center")
+# --- 3. UI DASHBOARD ---
+st.set_page_config(page_title="MLB Tactical Multi-Table", layout="wide")
+st.title("⚾ MLB Matchup Tactical Dashboard")
 
-df = fetch_vsin_data()
+df = fetch_multi_table_data()
 
 if not df.empty:
+    # Calculations
     df['Away_Win_%'] = df.apply(lambda x: calculate_poisson_win_prob(x['Away_Proj'], x['Home_Proj']), axis=1)
-    df['Home_Win_%'] = 1 - df['Away_Win_%']
-    
-    st.header("📊 Live Data & Poisson Projections")
-    st.dataframe(df.style.format({
-        'Away_Win_%': '{:.1%}', 'Home_Win_%': '{:.1%}'
-    }), hide_index=True, use_container_width=True)
+    df['Away_EV'] = df.apply(lambda x: calculate_ev(x['Away_Win_%'], x['Away_ML']), axis=1)
+
+    st.header("🏁 Full Slate Analysis")
+    st.dataframe(df.style.format({'Away_Win_%': '{:.1%}', 'Away_EV': '{:.2%}'}), use_container_width=True)
 
     st.divider()
-    st.header("🧠 Tactical Notes")
+    st.header("🧠 Tactical Scouting Reports")
     for _, row in df.iterrows():
         with st.expander(f"Scouting Report: {row['Away']} @ {row['Home']}"):
-            st.write(f"📊 **EST Scores Scraped**: {row['Away']} ({row['Away_Proj']}) | {row['Home']} ({row['Home_Proj']})")
-            st.write(f"🎯 **Win Probability**: {row['Away']} has a {row['Away_Win_%']:.1%} chance to win based on Poisson engine.")
+            st.write(f"📊 **EST Scores**: {row['Away']} ({row['Away_Proj']}) | {row['Home']} ({row['Home_Proj']})")
+            st.write(f"🎯 **Model Edge**: {row['Away_EV']:.1%} EV on the Away side.")
 else:
-    st.warning("🔄 Connecting to VSiN... If this stays blank, the 'EST Score' column name might have changed slightly on the live site.")
+    st.info("Scanning VSiN for individual game tables and EST Scores...")
