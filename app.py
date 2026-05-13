@@ -34,16 +34,14 @@ if not df.empty:
             try: return float(str(v).replace('%','').replace(',','').strip())
             except: return 0.0
 
-        # --- 3. SAFE MAPPING (Prevents Index Errors) ---
+        # --- 3. SAFE MAPPING ---
         def safe_get(idx, name_hint=""):
-            """Tries to find column by index, fallback to column name hint."""
             if idx < main_df.shape[1]:
                 return main_df.iloc[:, idx].astype(str)
             if name_hint in main_df.columns:
                 return main_df[name_hint].astype(str)
             return pd.Series([""] * len(main_df))
 
-        # Building master_table using safe index checks
         master_table = pd.DataFrame({
             "Matchup": safe_get(0) + " @ " + safe_get(1),
             "Vegas Odds": safe_get(4, "Vegas Lines") + " / " + safe_get(5),
@@ -62,14 +60,13 @@ if not df.empty:
         sharp_count = len(master_table[master_table['Sharp Dog'].str.len() > 1])
         c2.metric("Sharp Targets", sharp_count)
         
-        # Safe EV Calculation for high edges
         ev_edges = 0
         if main_df.shape[1] > 23:
             ev_edges = sum(1 for i, row in main_df.iterrows() if to_n(row.iloc[22]) > 10 or to_n(row.iloc[23]) > 10)
         c3.metric("High EV Edges", ev_edges)
         c4.metric("Market Status", "LIVE")
 
-        # --- 5. VISUAL TACTICAL BOARD ---
+        # --- 5. VISUAL TACTICAL BOARD (Expanded Height) ---
         st.subheader("Tactical Board")
         
         def highlight_logic(row):
@@ -83,7 +80,7 @@ if not df.empty:
         st.dataframe(
             master_table.style.apply(highlight_logic, axis=1),
             use_container_width=True,
-            height=450,
+            height=800, # Increased height to fit more games without scrolling
             hide_index=True
         )
 
@@ -106,23 +103,14 @@ if not df.empty:
             st.subheader("📝 Scouting Notes (The 'Why')")
             for _, row in master_table.iterrows():
                 note = str(row['Tactical Note']).strip()
-                matchup = row['Matchup']
-                
-                # If note exists in sheet, show it. If not, auto-summarize based on EV.
                 if len(note) > 3:
-                    with st.expander(f"Analysis: {matchup}"):
+                    with st.expander(f"Analysis: {row['Matchup']}"):
                         st.write(f"**Field Intelligence**: {note}")
-                        if any(k in note.lower() for k in ["pitcher", "xera", "fip"]):
-                            st.caption("🔍 Case: Pitching Mispricing Identified")
-                        elif "wind" in note.lower() or "weather" in note.lower():
-                            st.caption("🌬️ Case: Environmental Factor")
                 else:
-                    # Automatic tactical summary if the notes column is empty
-                    with st.expander(f"Data Intel: {matchup}"):
-                        st.write(f"High-value target on **{row['Model Pick']}** identified with EV edge of **{row['EV (A/H)']}**.")
+                    with st.expander(f"Data Intel: {row['Matchup']}"):
+                        st.write(f"Value target on **{row['Model Pick']}** with EV: **{row['EV (A/H)']}**.")
 
     except Exception as e:
         st.error(f"Logic Error: {e}")
-        st.info("Check if Column headers in Row 2 of your sheet were renamed.")
 else:
     st.info("🔄 Syncing with Google Sheets 'Model' tab...")
