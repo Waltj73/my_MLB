@@ -2,75 +2,83 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy.stats import poisson
-import requests
 
-# --- 1. THE POISSON ENGINE (Your Precise Excel Math) ---
+# --- 1. THE POISSON ENGINE (Core Logic) ---
 def calculate_poisson_win_prob(away_lambda, home_lambda):
     if away_lambda <= 0 or home_lambda <= 0:
         return 0.50 
     scores = np.arange(16)
     away_pmf = poisson.pmf(scores, away_lambda)
     home_pmf = poisson.pmf(scores, home_lambda)
-    
-    # Logic to capture the "Air Gap" pullbacks and win probability
     away_cdf = poisson.cdf(np.maximum(0, scores - 1), away_lambda)
     home_cdf = poisson.cdf(np.maximum(0, scores - 1), home_lambda)
-    
     p_away = np.sum(away_pmf * home_cdf)
     p_home = np.sum(home_pmf * away_cdf)
     return p_away / (p_away + p_home)
 
-# --- 2. THE DATA BRIDGE ---
-@st.cache_data(ttl=60)
-def get_vsin_data_bridge():
-    """
-    Directly fetches the JSON data feed that powers the VSiN tables.
-    This bypasses the HTML/Header issues entirely.
-    """
-    try:
-        # Direct API endpoint for the MLB Betting Splits
-        url = "https://data.vsin.com/api/splits?sport=MLB&source=DK"
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        
-        # We extract the specific 'EST Score' and 'Handle' fields you need
-        rows = []
-        for game in data.get('games', []):
-            rows.append({
-                'Away': game.get('awayTeam'),
-                'Home': game.get('homeTeam'),
-                'Away_ML': game.get('awayML'),
-                'Away_Proj': float(game.get('awayEstScore', 0)), # The 3.8 value
-                'Home_Proj': float(game.get('homeEstScore', 0)), # The 5.5 value
-                'Away_Hnd': float(game.get('awayHandle', 0)),
-                'Away_Bets': float(game.get('awayBets', 0))
-            })
-        return pd.DataFrame(rows)
-    except Exception as e:
-        st.error(f"Bridge Connection Error: {e}")
-        return pd.DataFrame()
+def calculate_ev(win_prob, ml_odds):
+    if not ml_odds: return 0
+    # Implied win percentages rather than estimated runs
+    dec = (ml_odds / 100) + 1 if ml_odds > 0 else (100 / abs(ml_odds)) + 1
+    return (win_prob * (dec - 1)) - (1 - win_prob)
 
-# --- 3. TACTICAL UI ---
-st.set_page_config(page_title="MLB Tactical Bridge", layout="wide")
-st.title("⚾ MLB Automated Tactical Dashboard")
+# --- 2. USER INPUTS (The Manual Bridge) ---
+st.set_page_config(page_title="MLB Tactical Engine", layout="wide")
+st.title("⚾ MLB Tactical Matchup Center")
 
-df = get_vsin_data_bridge()
-
-if not df.empty:
-    df['Away_Win_%'] = df.apply(lambda x: calculate_poisson_win_prob(x['Away_Proj'], x['Home_Proj']), axis=1)
-    df['Sharp_Diff'] = df['Away_Hnd'] - df['Away_Bets']
-
-    st.header("🏁 Live Slate Analysis")
-    st.dataframe(
-        df.style.format({'Away_Win_%': '{:.1%}', 'Sharp_Diff': '{:+.0f}%'})
-        .background_gradient(subset=['Sharp_Diff'], cmap='RdYlGn'),
-        use_container_width=True, hide_index=True
-    )
+with st.sidebar:
+    st.header("📋 Live Game Entry")
+    away_t = st.text_input("Away Team", "Away")
+    home_t = st.text_input("Home Team", "Home")
     
-    # Individual Tactical Scouting Reports
-    for _, row in df.iterrows():
-        with st.expander(f"Report: {row['Away']} @ {row['Home']}"):
-            st.write(f"📊 **EST Projections**: {row['Away_Proj']} vs {row['Home_Proj']}")
-            st.metric("Model Win %", f"{row['Away_Win_%']:.1%}")
-else:
-    st.info("🔄 Establishing Bridge to VSiN Data Feed...")
+    c1, c2 = st.columns(2)
+    a_ml = c1.number_input(f"{away_t} MoneyML", value=139) # From image_2067d9.png
+    h_ml = c2.number_input(f"{home_t} MoneyML", value=-160)
+    
+    st.subheader("📊 EST Scores (Lambdas)")
+    a_est = st.number_input(f"{away_t} EST Score", value=3.8, step=0.1) #
+    h_est = st.number_input(f"{home_t} EST Score", value=5.5, step=0.1)
+    
+    st.subheader("🐳 Sharp Sentiment")
+    hnd = st.slider("Handle % (Money)", 0, 100, 75)
+    bets = st.slider("Bets % (Tickets)", 0, 100, 45)
+
+# --- 3. CALCULATIONS ---
+a_win_p = calculate_poisson_win_prob(a_est, h_est)
+a_ev = calculate_ev(a_win_p, a_ml)
+sharp_diff = hnd - bets
+
+# --- 4. TACTICAL SCOUTING REPORTS (The "Notes" Section) ---
+st.header(f"📈 Tactical Report: {away_t} @ {home_t}")
+
+m1, m2, m3 = st.columns(3)
+m1.metric(f"{away_t} Win Probability", f"{a_win_p:.1%}")
+m2.metric("Away Edge (EV)", f"{a_ev:.2%}")
+m3.metric("Sharp Discrepancy", f"{sharp_diff}%")
+
+st.divider()
+
+col_left, col_right = st.columns(2)
+
+with col_left:
+    st.subheader("🎯 Model Analysis")
+    st.write(f"Based on your **{a_est}** to **{h_est}** EST Score projection:")
+    
+    if a_win_p > 0.55:
+        st.success(f"**Heavy Favorite**: Model gives {away_t} a strong statistical advantage.")
+    elif a_win_p < 0.40:
+        st.error(f"**Underdog Status**: The {away_t} faces a significant climb based on current lambdas.")
+    
+    if abs(a_ev) > 0.08:
+        st.warning(f"💡 **Market Inefficiency**: There is a significant {a_ev:.1%} EV gap. Possible mispricing on the MoneyML.")
+
+with col_right:
+    st.subheader("🐳 Institutional Flow (Sharp Notes)")
+    if sharp_diff > 15:
+        st.info(f"**Sharp Alert**: Large money is moving toward {away_t} despite lower ticket counts.")
+    elif sharp_diff < -15:
+        st.info(f"**Sharp Alert**: Large money is backing {home_t}. Public is on the other side.")
+    else:
+        st.write("⚖️ **Market Balance**: Handle and Bets are tracking closely. No major sharp divergence detected.")
+
+st.info(f"📝 **Note**: This model prioritizes implied win percentages over estimated runs.")
