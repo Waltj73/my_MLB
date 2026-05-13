@@ -3,3 +3,6 @@ pandas
 numpy
 scipy
 MLB-StatsAPI
+streamlit-autorefresh
+cloudscraper
+requests
