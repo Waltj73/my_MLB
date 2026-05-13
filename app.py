@@ -5,7 +5,7 @@ from scipy.stats import poisson
 import cloudscraper
 import io
 
-# --- 1. THE POISSON ENGINE (Core Math) ---
+# --- 1. THE POISSON ENGINE ---
 def calculate_poisson_win_prob(away_lambda, home_lambda):
     if pd.isna(away_lambda) or pd.isna(home_lambda) or away_lambda <= 0:
         return 0.50 
@@ -23,70 +23,78 @@ def calculate_ev(win_prob, ml_odds):
     dec = (ml_odds / 100) + 1 if ml_odds > 0 else (100 / abs(ml_odds)) + 1
     return (win_prob * (dec - 1)) - (1 - win_prob)
 
-# --- 2. RESTORED SCRAPER (Split Page Focused) ---
+# --- 2. THE BRUTE-FORCE SCRAPER ---
 @st.cache_data(ttl=300)
-def fetch_vsin_baseline():
+def fetch_vsin_brute_force():
     scraper = cloudscraper.create_scraper()
     try:
-        # Focusing on the Betting Splits page as the primary table
         url = "https://data.vsin.com/betting-splits/?source=DK&sport=MLB"
         response = scraper.get(url, timeout=10)
         tables = pd.read_html(io.StringIO(response.text), flavor='lxml')
         
-        # We look for the main betting table (usually table 0 or 1)
-        df = None
-        for t in tables:
-            if 'money' in "".join(t.columns.astype(str)).lower():
-                df = t
+        target_df = None
+        for df in tables:
+            # FLATTEN MULTI-INDEX HEADERS: This is likely where it was breaking.
+            # It turns [('Un-named', 'Team'), ('DraftKings', 'MoneyML')] into 'Team MoneyML'
+            df.columns = [" ".join(str(level) for level in col).strip() if isinstance(col, tuple) else str(col) for col in df.columns]
+            
+            # Look for the table that actually has the data
+            col_txt = " ".join(df.columns).lower()
+            if 'ml' in col_txt or 'money' in col_txt:
+                target_df = df
                 break
         
-        if df is None: return pd.DataFrame()
+        if target_df is None: return pd.DataFrame()
 
-        # UNSTACKING LOGIC: Away (even rows), Home (odd rows)
-        away_rows = df.iloc[::2].reset_index(drop=True)
-        home_rows = df.iloc[1::2].reset_index(drop=True)
+        # Helper to find column by "contains" logic
+        def find_col(keywords):
+            for col in target_df.columns:
+                if any(k.lower() in col.lower() for k in keywords): return col
+            return None
 
-        # MAPPING: Specifically targeting column names from image_2067d9.png
-        matchups = pd.DataFrame({
-            'Away': away_rows.iloc[:, 1],
-            'Home': home_rows.iloc[:, 1],
-            'Away_ML': pd.to_numeric(away_rows['MoneyML'], errors='coerce'),
-            'Away_Proj': pd.to_numeric(away_rows['EST Score'], errors='coerce'), # Pulled from Splits Page column
-            'Home_Proj': pd.to_numeric(home_rows['EST Score'], errors='coerce'),
-            'Away_Hnd': pd.to_numeric(away_rows['HandleHND.2'].astype(str).str.extract('(\d+)')[0], errors='coerce'),
-            'Away_Bets': pd.to_numeric(away_rows['BetsBET.2'].astype(str).str.extract('(\d+)')[0], errors='coerce')
+        col_team = find_col(['team', 'matchup'])
+        col_ml = find_col(['money', 'ml'])
+        col_est = find_col(['est', 'score'])
+        col_hnd = find_col(['hnd', 'handle'])
+        col_bets = find_col(['bet', 'count'])
+
+        # Unstack rows (Away/Home)
+        away = target_df.iloc[::2].reset_index(drop=True)
+        home = target_df.iloc[1::2].reset_index(drop=True)
+
+        final = pd.DataFrame({
+            'Away': away[col_team],
+            'Home': home[col_team],
+            'Away_ML': pd.to_numeric(away[col_ml], errors='coerce'),
+            'Away_Proj': pd.to_numeric(away[col_est], errors='coerce'),
+            'Home_Proj': pd.to_numeric(home[col_est], errors='coerce'),
+            'Away_Hnd': pd.to_numeric(away[col_hnd].astype(str).str.extract('(\d+)')[0], errors='coerce'),
+            'Away_Bets': pd.to_numeric(away[col_bets].astype(str).str.extract('(\d+)')[0], errors='coerce')
         })
         
-        matchups['Sharp_Diff'] = matchups['Away_Hnd'] - matchups['Away_Bets']
-        return matchups.dropna(subset=['Away_Proj'])
+        final['Sharp_Diff'] = final['Away_Hnd'] - final['Away_Bets']
+        return final.dropna(subset=['Away', 'Away_Proj'])
 
     except Exception as e:
         st.error(f"Sync Error: {e}")
         return pd.DataFrame()
 
-# --- 3. DASHBOARD DISPLAY ---
-st.set_page_config(page_title="MLB Restored Baseline", layout="wide")
-st.title("⚾ MLB Tactical Matchup Center")
+# --- 3. UI ---
+st.set_page_config(page_title="MLB Tactical Fix", layout="wide")
+st.title("⚾ MLB Automated Tactical Dashboard")
 
-df = fetch_vsin_baseline()
+df = fetch_vsin_brute_force()
 
 if not df.empty:
-    # Calculations
     df['Away_Win_%'] = df.apply(lambda x: calculate_poisson_win_prob(x['Away_Proj'], x['Home_Proj']), axis=1)
     df['Away_EV'] = df.apply(lambda x: calculate_ev(x['Away_Win_%'], x['Away_ML']), axis=1)
 
     st.header("🏁 Live Slate Analysis")
-    cols = ['Away', 'Home', 'Away_ML', 'Away_Proj', 'Home_Proj', 'Away_Win_%', 'Away_EV', 'Sharp_Diff']
-    st.dataframe(df[cols].style.format({
-        'Away_Win_%': '{:.1%}', 'Away_EV': '{:.2%}', 'Sharp_Diff': '{:+.0f}%'
-    }).background_gradient(subset=['Away_EV', 'Sharp_Diff'], cmap='RdYlGn'), 
-    hide_index=True, use_container_width=True)
-
-    st.divider()
-    st.header("🧠 Tactical Scouting Reports")
-    for _, row in df.iterrows():
-        with st.expander(f"Scouting Report: {row['Away']} @ {row['Home']}"):
-            st.write(f"📊 **EST Scores**: {row['Away']} ({row['Away_Proj']}) | {row['Home']} ({row['Home_Proj']})")
-            st.metric("Away Poisson Win %", f"{row['Away_Win_%']:.1%}")
+    st.dataframe(
+        df.style.format({
+            'Away_Win_%': '{:.1%}', 'Away_EV': '{:.2%}', 'Sharp_Diff': '{:+.0f}%'
+        }).background_gradient(subset=['Away_EV', 'Sharp_Diff'], cmap='RdYlGn'),
+        hide_index=True, use_container_width=True
+    )
 else:
-    st.info("🔄 Connecting to VSiN Splits Table...")
+    st.warning("⚠️ Still no data. VSiN might be blocking the request or the headers are deeper than expected.")
