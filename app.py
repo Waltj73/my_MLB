@@ -1,72 +1,90 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import cloudscraper
+import requests
 import time
 from streamlit_autorefresh import st_autorefresh
 
-# --- 1. CONFIG & REFRESH ---
-st.set_page_config(page_title="MLB Command Center", layout="wide")
-st_autorefresh(interval=60 * 1000, key="vsin_sync")
+# --- 1. CONFIG & SYSTEM BEAT ---
+st.set_page_config(page_title="MLB Intelligence Engine", layout="wide")
+st_autorefresh(interval=60 * 1000, key="engine_pulse")
 
-# --- 2. YOUR MODEL PROJECTIONS ---
-# These are your personal win % probabilities
-my_projections = {
+# --- 2. THE PROJECTION VAULT ---
+# These are your proprietary win probabilities
+my_models = {
     "Angels": 35.0, "Yankees": 65.0, "Nationals": 42.0, "Rockies": 30.0,
     "Phillies": 52.0, "Rays": 45.0, "Tigers": 55.0, "Cubs": 60.0,
     "Royals": 51.0, "Marlins": 58.0, "Padres": 40.0, "D-Backs": 50.0,
     "Mariners": 58.0, "Cardinals": 48.0, "Giants": 30.0
 }
 
-# --- 3. THE STEALTH DATA FETCH ---
-def fetch_vsin_stealth():
-    # Cloudscraper bypasses the "Establishing connection" hang
-    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
+# --- 3. THE DATA ACQUISITION ---
+def fetch_vsin_live():
+    # Cache-busting URL to ensure fresh data every minute
     url = f"https://data.vsin.com/betting-splits-data/mlb.json?t={int(time.time())}"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     try:
-        response = scraper.get(url, timeout=10)
+        response = requests.get(url, headers=headers, timeout=8)
         return pd.DataFrame(response.json().get('data', []))
     except:
         return pd.DataFrame()
 
-# --- 4. EXECUTION ---
-df = fetch_vsin_stealth()
+# --- 4. THE MATCHING ENGINE ---
+def bridge_names(live_name):
+    """Bridges the gap between VSiN names and your Model names."""
+    for team, pct in my_models.items():
+        if team.lower() in live_name.lower():
+            return pct
+    return 50.0
 
-if not df.empty:
-    # THE NAME BRIDGE: Matches "NY Yankees" to "Yankees" automatically
-    def match_team(name):
-        for short, val in my_projections.items():
-            if short.lower() in name.lower():
-                return val
-        return 50.0
+# --- 5. THE EXECUTION ---
+raw_data = fetch_vsin_live()
 
-    # Clean numbers for math
+if not raw_data.empty:
+    # CLEANING: Standardize the numbers
     cols = ['v_ml', 'h_ml', 'v_handle_pct', 'v_bets_pct', 'h_handle_pct', 'h_bets_pct']
-    df[cols] = df[cols].apply(pd.to_numeric, errors='coerce').fillna(0)
+    raw_data[cols] = raw_data[cols].apply(pd.to_numeric, errors='coerce').fillna(0)
 
-    # WALT JOHNSON MATH: EV & Sharp Diff
-    df['My Win% A'] = df['away_team'].apply(match_team)
-    df['V_Payout'] = np.where(df['v_ml'] > 0, df['v_ml']/100, 100/abs(df['v_ml']))
-    df['EV_Away'] = (df['My Win% A']/100 * df['V_Payout'] * 100) - (100 - df['My Win% A'])
-    df['Sharp_Diff'] = df['v_handle_pct'] - df['v_bets_pct']
+    # MATH: EV and Sharp Divergence
+    raw_data['My_Win_Pct'] = raw_data['away_team'].apply(bridge_names)
+    raw_data['Payout'] = np.where(raw_data['v_ml'] > 0, raw_data['v_ml']/100, 100/abs(raw_data['v_ml']))
+    raw_data['EV'] = (raw_data['My_Win_Pct']/100 * raw_data['Payout'] * 100) - (100 - raw_data['My_Win_Pct'])
+    raw_data['Sharp_Diff'] = raw_data['v_handle_pct'] - raw_data['v_bets_pct']
 
-    # DYNAMIC NOTES (The Scouting Report)
-    def get_notes(row):
-        if row['Sharp_Diff'] > 15: return f"🔥 SHARP: {int(row['Sharp_Diff'])}% Money Gap"
-        if row['EV_Away'] > 12: return "🎯 VALUE: Edge detected"
-        return "Steady"
-    df['Live_Notes'] = df.apply(get_notes, axis=1)
+    # --- 6. UI: THE COMMAND CENTER ---
+    st.title("⚾ MLB Intelligence Command Center")
+    st.caption(f"LIVE DATA SYNC | Last Heartbeat: {time.strftime('%H:%M:%S')}")
 
-    # --- 5. THE TABLE ---
-    st.title("⚾ MLB Live Command Center")
-    st.caption(f"Status: Live Syncing | Last Update: {time.strftime('%H:%M:%S')}")
-
-    view_cols = ['away_team', 'home_team', 'v_ml', 'h_ml', 'v_handle_pct', 'v_bets_pct', 'EV_Away', 'Live_Notes']
+    # HIGHLIGHT ZONE: Show only the plays with a mathematical edge
+    alerts = raw_data[(raw_data['EV'] > 12) | (abs(raw_data['Sharp_Diff']) > 15)].copy()
     
-    def color_ev(val):
+    if not alerts.empty:
+        st.subheader("🔥 High-Priority Alerts")
+        for _, row in alerts.iterrows():
+            with st.expander(f"ALERT: {row['away_team']} @ {row['home_team']}", expanded=True):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Expected Value (EV)", f"{row['EV']:.1f}%")
+                with col2:
+                    st.metric("Sharp Differential", f"{int(row['Sharp_Diff'])}%")
+                
+                # Dynamic Scout Notes
+                if row['EV'] > 12:
+                    st.info(f"**SITUATIONAL VALUE**: Your model shows a significant edge relative to the Vegas ML of {row['v_ml']}.")
+                if abs(row['Sharp_Diff']) > 15:
+                    st.warning(f"**SHARP ACTION**: Professional money is heavy on {row['away_team']} relative to the ticket count.")
+
+    # FULL SLATE TABLE
+    st.divider()
+    st.subheader("📋 Full Market Overview")
+    
+    view_df = raw_data[['away_team', 'home_team', 'v_ml', 'h_ml', 'v_handle_pct', 'v_bets_pct', 'EV']]
+    
+    def highlight_ev(val):
         color = '#27ae60' if val > 12 else ('#c0392b' if val < -10 else '')
         return f'background-color: {color}; color: white'
 
-    st.dataframe(df[view_cols].style.applymap(color_ev, subset=['EV_Away']), use_container_width=True, hide_index=True)
+    st.dataframe(view_df.style.applymap(highlight_ev, subset=['EV']), use_container_width=True, hide_index=True)
+
 else:
-    st.error("🔄 Connection Blocked. Attempting Stealth Re-sync...")
+    st.error("🔄 Connecting to Market Feed... If this takes longer than 10s, check your firewall/VPN.")
