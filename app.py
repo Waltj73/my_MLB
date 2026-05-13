@@ -84,7 +84,6 @@ def first_word(v):
     )
 
 
-# Column-name first, index fallback
 def safe_get(df, name_hint="", idx=None):
 
     if (
@@ -143,7 +142,6 @@ if df.empty:
 
 try:
 
-    # Remove junk/header rows
     main_df = df[
         df.iloc[:, 0]
         .astype(str)
@@ -270,7 +268,7 @@ try:
     })
 
     # --------------------------------------------------------
-    # VECTORIZED EV
+    # EV DETECTION
     # --------------------------------------------------------
 
     ev_away = pd.to_numeric(
@@ -406,9 +404,9 @@ try:
 
     left, right = st.columns(2)
 
-    # ------------------------
-    # Sharp Alignment
-    # ------------------------
+    # ========================================================
+    # SHARP ALIGNMENTS
+    # ========================================================
 
     with left:
 
@@ -475,9 +473,9 @@ try:
                     f"(Model: {model_display})"
                 )
 
-    # ------------------------
-    # High EV
-    # ------------------------
+    # ========================================================
+    # HIGH EV DETAIL
+    # ========================================================
 
     with right:
 
@@ -489,22 +487,128 @@ try:
             high_ev_mask
         ]
 
-        for _, row in high_ev_rows.iterrows():
+        for idx, row in high_ev_rows.iterrows():
+
+            away_ev = to_n(
+                ev_away.iloc[idx]
+            )
+
+            home_ev = to_n(
+                ev_home.iloc[idx]
+            )
+
+            sharp_team = normalize_team(
+                row["Sharp Dog"]
+            )
+
+            model_team = normalize_team(
+                first_word(
+                    row["Model Pick"]
+                )
+            )
+
+            away_team = (
+                row["Matchup"]
+                .split("@")[0]
+                .strip()
+            )
+
+            home_team = (
+                row["Matchup"]
+                .split("@")[1]
+                .strip()
+            )
+
+            if (
+                away_ev is not None
+                and
+                (
+                    home_ev is None
+                    or away_ev >= home_ev
+                )
+            ):
+
+                edge_team = away_team
+                edge_ev = away_ev
+
+                vegas_line = safe_get(
+                    main_df,
+                    "Vegas Away",
+                    4
+                ).iloc[idx]
+
+                win_pct = safe_get(
+                    main_df,
+                    "My Win Away",
+                    18
+                ).iloc[idx]
+
+            else:
+
+                edge_team = home_team
+                edge_ev = home_ev
+
+                vegas_line = safe_get(
+                    main_df,
+                    "Vegas Home",
+                    5
+                ).iloc[idx]
+
+                win_pct = safe_get(
+                    main_df,
+                    "My Win Home",
+                    19
+                ).iloc[idx]
+
+            # Grade edge
+            if edge_ev >= 20:
+
+                tier = "🟢 ELITE EDGE"
+
+            elif edge_ev >= 15:
+
+                tier = "🔵 STRONG EDGE"
+
+            else:
+
+                tier = "🟡 VALUE EDGE"
+
+            aligned = (
+
+                sharp_team
+                and
+                sharp_team == model_team
+
+            )
+
+            signal = (
+
+                "Sharps + Model Aligned"
+
+                if aligned
+
+                else "Model Only"
+
+            )
 
             st.info(
 
-                f"**VALUE EDGE**: "
+                f"""
+**{tier}** — {row['Matchup']}
 
-                f"{row['Matchup']} → "
-
-                f"**{row['Model Pick']}** "
-
-                f"(EV: {row['EV (A/H)']})"
+**Model Pick:** {row['Model Pick']}  
+**Edge Side:** {edge_team}  
+**Expected Value:** {edge_ev:.2f}%  
+**Vegas Line:** {vegas_line}  
+**Model Win %:** {win_pct}  
+**Sharp Action:** {"YES" if sharp_team else "NO"}  
+**Signal:** {signal}
+"""
             )
 
-    # --------------------------------------------------------
+    # ========================================================
     # FIELD NOTES
-    # --------------------------------------------------------
+    # ========================================================
 
     st.divider()
 
