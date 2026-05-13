@@ -19,7 +19,7 @@ def calculate_ev(win_prob, ml_odds):
     dec = (ml_odds / 100) + 1 if ml_odds > 0 else (100 / abs(ml_odds)) + 1
     return (win_prob * (dec - 1)) - (1 - win_prob)
 
-# --- 2. THE HARDENED SYNC ENGINE ---
+# --- 2. THE REINFORCED SYNC ENGINE ---
 SHEET_ID = '1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0'
 GID = '1240994733'
 URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}'
@@ -27,22 +27,22 @@ URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=
 @st.cache_data(ttl=30)
 def load_live_slate():
     try:
-        # Step A: Load the raw data
-        raw_df = pd.read_csv(URL, header=None)
+        # Load raw without headers first
+        raw_df = pd.read_csv(URL, header=None).fillna('')
         
-        # Step B: Deep-Scan for the Header Row
-        # This finds the row that actually contains "Away" or "Home"
+        # FIXED: Deep-Scan with float protection
         header_row_index = 0
         for i, row in raw_df.iterrows():
-            row_str = row.astype(str).str.lower().tolist()
-            if any("away" in s for s in row_str) and any("home" in s for s in row_str):
+            # Force everything to string before checking 'away' or 'home'
+            row_str_list = [str(val).lower() for val in row.tolist()]
+            if any("away" in s for s in row_str_list) and any("home" in s for s in row_str_list):
                 header_row_index = i
                 break
         
-        # Step C: Re-load with the correct header location
+        # Re-load from the identified header row
         df = pd.read_csv(URL, skiprows=header_row_index)
         df.columns = [str(c).strip().replace('"', '') for c in df.columns]
-        return df.dropna(subset=[df.columns[0]]) # Remove empty rows at the bottom
+        return df.dropna(subset=[df.columns[0]])
     except Exception as e:
         st.error(f"Sync Interrupted: {e}")
         return pd.DataFrame()
@@ -54,13 +54,12 @@ st.title("⚾ MLB Tactical Command Center")
 df = load_live_slate()
 
 if not df.empty:
-    # helper to find columns by keywords
     def find_col(keywords):
         for col in df.columns:
             if any(k.lower() in col.lower() for k in keywords): return col
         return None
 
-    # Column Mapping
+    # Mapping your specific columns
     c_away = find_col(['Away'])
     c_home = find_col(['Home'])
     c_a_est = find_col(['Away EST', 'A_EST'])
@@ -69,9 +68,8 @@ if not df.empty:
     c_hnd = find_col(['HandleHND.2', 'Handle', 'HND'])
     c_bet = find_col(['BetsBET.2', 'Bets', 'BET'])
 
-    # Final Verification before processing
     if not c_away or not c_home:
-        st.error("Could not find 'Away' or 'Home' columns. Check your spreadsheet headers.")
+        st.error("Header Scan failed to find 'Away' or 'Home' columns.")
         st.stop()
 
     def clean_num(val):
@@ -91,6 +89,7 @@ if not df.empty:
     st.header(f"📈 Scouting Report: {g[c_away]} @ {g[c_home]}")
     
     m1, m2, m3 = st.columns(3)
+    # Focusing on EV and Implied Win % over estimated runs
     m1.metric("Model Win %", f"{g['Win_Prob']:.1%}")
     m2.metric("Edge (EV)", f"{g['EV']:.2%}")
     m3.metric("Sharp Discrepancy", f"{g['Sharp_Diff']:.0f}%")
@@ -113,4 +112,4 @@ if not df.empty:
 
     st.caption("🔄 Data synced live from Google Sheet tab [MLB]. Refresh every 30s.")
 else:
-    st.info("🔄 Connecting to Live Sheet... Ensure the MLB tab has Away/Home data.")
+    st.info("🔄 Connecting... Ensure the MLB tab contains your Away/Home headers.")
