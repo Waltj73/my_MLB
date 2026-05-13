@@ -9,7 +9,7 @@ URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=
 @st.cache_data(ttl=15)
 def load_data():
     try:
-        # skiprows=1 aligns headers with 'Away Team' / 'Home Team' (Row 2 in sheet)
+        # skips Row 1 to hit 'Away Team' / 'Home Team' headers in Row 2
         df = pd.read_csv(URL, skiprows=1)
         df.columns = [str(c).strip() for c in df.columns]
         return df
@@ -54,16 +54,18 @@ if not df.empty:
         # --- 4. EXECUTIVE METRICS ---
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total Games", len(master_table))
-        sharp_count = len(master_table[master_table['Sharp Dog'].str.len() > 1])
-        c2.metric("Sharp Targets", sharp_count)
+        sharp_targets = master_table[master_table['Sharp Dog'].str.len() > 1]
+        c2.metric("Sharp Targets", len(sharp_targets))
         
-        ev_edges = 0
-        if main_df.shape[1] > 23:
-            ev_edges = sum(1 for i, row in main_df.iterrows() if to_n(row.iloc[22]) > 10 or to_n(row.iloc[23]) > 10)
-        c3.metric("High EV Edges", ev_edges)
+        # Identified via Poisson/wRC+ metrics in your model
+        high_ev_list = []
+        for i, row in main_df.iterrows():
+            if to_n(row.iloc[22]) > 10 or to_n(row.iloc[23]) > 10:
+                high_ev_list.append(f"{row.iloc[0]}@{row.iloc[1]}")
+        c3.metric("High EV Edges", len(high_ev_list))
         c4.metric("Market Status", "LIVE")
 
-        # --- 5. VISUAL TACTICAL BOARD (Maximized Height) ---
+        # --- 5. VISUAL TACTICAL BOARD ---
         st.subheader("Tactical Board")
         
         def highlight_logic(row):
@@ -77,47 +79,44 @@ if not df.empty:
         st.dataframe(
             master_table.style.apply(highlight_logic, axis=1),
             use_container_width=True,
-            height=1000, # Expanded height for full table visibility
+            height=1000, 
             hide_index=True
         )
 
-        # --- 6. SHARP OUTLOOK & DETAILED NOTES ---
+        # --- 6. INTEGRATED TACTICAL OUTLOOK (NEW SECTION) ---
         st.divider()
-        col_l, col_r = st.columns(2)
-
-        with col_l:
-            st.subheader("🎯 Sharp Money Alignment")
+        st.subheader("📝 Detailed Tactical Outlook")
+        
+        out_l, out_r = st.columns(2)
+        
+        with out_l:
+            st.markdown("#### 🔥 Top Sharp Bets & Alignments")
+            # Pulling Sharp Dog and Alignment logic directly to the top
             for _, row in master_table.iterrows():
                 s_dog = str(row['Sharp Dog']).strip()
                 pick = str(row['Model Pick']).strip()
                 if len(s_dog) > 1:
                     if s_dog in pick:
-                        st.success(f"**CONVICTION**: Sharps & Model both aligned on {s_dog}")
+                        st.success(f"**ALIGNED**: {row['Matchup']} → Sharps and Model both on **{s_dog}**")
                     else:
-                        st.warning(f"**CONFLICT**: Sharps moving on {s_dog} vs Model Pick: {pick}")
+                        st.warning(f"**SHARP BIAS**: {row['Matchup']} → Sharps on **{s_dog}** (Model leans {pick})")
 
-        with col_r:
-            st.subheader("📝 Tactical Outlook")
-            for _, row in master_table.iterrows():
-                note = str(row['Tactical Note']).strip()
-                s_dog = str(row['Sharp Dog']).strip()
-                pick = str(row['Model Pick']).strip()
-                ev = row['EV (A/H)']
-                
-                # Automated Detailed Outlook implementation
-                with st.expander(f"Outlook: {row['Matchup']}"):
-                    if len(note) > 3:
-                        st.markdown(f"**User Intelligence**: {note}")
-                    
-                    # Implementation of automated data outlook
-                    st.markdown("---")
-                    st.markdown(f"**Top Pick Analysis**: The model is currently prioritizing **{pick}** based on an EV profile of **{ev}**.")
-                    
-                    if len(s_dog) > 1:
-                        st.markdown(f"**Sharp Outlook**: Professional handle is tracking toward **{s_dog}**. " + 
-                                   ("This reinforces the model conviction." if s_dog in pick else "Monitor for late-market deviation."))
-                    else:
-                        st.markdown("**Sharp Outlook**: No significant professional deviation detected at this time.")
+        with out_r:
+            st.markdown("#### 📈 High EV Model Picks")
+            # Logic using your Expected Value (EV) correction
+            for i, row in master_table.iterrows():
+                ev_str = str(row['EV (A/H)'])
+                if any(to_n(x) > 10 for x in ev_str.split('/')):
+                    st.info(f"**VALUE EDGE**: {row['Matchup']} → **{row['Model Pick']}** (EV: {ev_str})")
+
+        # --- 7. FIELD NOTES ---
+        st.divider()
+        st.subheader("🔍 Individual Game Intel")
+        for _, row in master_table.iterrows():
+            note = str(row['Tactical Note']).strip()
+            if len(note) > 3:
+                with st.expander(f"Field Note: {row['Matchup']}"):
+                    st.write(note)
 
     except Exception as e:
         st.error(f"Logic Error: {e}")
