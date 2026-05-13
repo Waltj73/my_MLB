@@ -8,10 +8,8 @@ def calculate_poisson_win_prob(away_lambda, home_lambda):
     if pd.isna(away_lambda) or pd.isna(home_lambda) or away_lambda <= 0 or home_lambda <= 0:
         return 0.50
     scores = np.arange(16)
-    away_pmf = poisson.pmf(scores, away_lambda)
-    home_pmf = poisson.pmf(scores, home_lambda)
-    away_cdf = poisson.cdf(np.maximum(0, scores - 1), away_lambda)
-    home_cdf = poisson.cdf(np.maximum(0, scores - 1), home_lambda)
+    away_pmf, home_pmf = poisson.pmf(scores, away_lambda), poisson.pmf(scores, home_lambda)
+    away_cdf, home_cdf = poisson.cdf(np.maximum(0, scores - 1), away_lambda), poisson.cdf(np.maximum(0, scores - 1), home_lambda)
     p_away = np.sum(away_pmf * home_cdf)
     p_home = np.sum(home_pmf * away_cdf)
     return p_away / (p_away + p_home)
@@ -21,83 +19,82 @@ def calculate_ev(win_prob, ml_odds):
     dec = (ml_odds / 100) + 1 if ml_odds > 0 else (100 / abs(ml_odds)) + 1
     return (win_prob * (dec - 1)) - (1 - win_prob)
 
-# --- 2. THE HARD-WIRED SYNC ENGINE ---
+# --- 2. DATA SYNC ---
 SHEET_ID = '1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0'
-GID = '1240994733' # Direct GID for the MLB Tab
+GID = '1240994733' # Locks to the MLB tab
 URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}'
 
 @st.cache_data(ttl=30)
-def load_live_data():
+def load_data():
     try:
-        # Load the CSV, forcing all data to strings to prevent 'float' errors
-        df = pd.read_csv(URL, dtype=str).fillna('0')
-        # Clean up column headers by removing any extra spaces or quotes
-        df.columns = [str(c).strip().replace('"', '') for c in df.columns]
-        return df
+        # Step A: Load the sheet and find exactly where the game rows start
+        raw = pd.read_csv(URL, header=None).fillna('')
+        data_start = 0
+        for i, row in raw.iterrows():
+            if any(k in str(x).lower() for k in ["away", "home"] for x in row.values):
+                data_start = i
+                break
+        
+        # Step B: Reload skipping the trash above your headers
+        df = pd.read_csv(URL, skiprows=data_start)
+        return df.dropna(how='all').reset_index(drop=True)
     except Exception as e:
-        st.error(f"Critical Connection Error: {e}")
+        st.error(f"Sync Error: {e}")
         return pd.DataFrame()
 
 # --- 3. UI & ANALYTICS ---
 st.set_page_config(page_title="MLB Tactical Command", layout="wide")
 st.title("⚾ MLB Tactical Command Center")
 
-df = load_live_data()
+df = load_data()
 
 if not df.empty:
-    # Helper: Convert data to numbers safely
-    def to_num(val):
-        try:
-            return pd.to_numeric(str(val).replace('%', '').replace(',', '').strip(), errors='coerce')
-        except:
-            return 0.0
+    # --- HARD-CODED COLUMN POSITIONS ---
+    # These correspond to Columns A, B, C... in your MLB tab
+    try:
+        POS_AWAY = 0    # Col A
+        POS_HOME = 1    # Col B
+        POS_A_EST = 5   # Col F (Away EST)
+        POS_H_EST = 6   # Col G (Home EST)
+        POS_ML = 7      # Col H (MoneyML)
+        POS_HND = 12    # Col M (Handle %)
+        POS_BET = 13    # Col N (Bets %)
 
-    # DYNAMIC COLUMN SEARCH (Finds your specific Poisson/EV metrics)
-    # We look for the exact names from your spreadsheet ledger
-    cols = df.columns.tolist()
-    
-    def get_c(keywords):
-        for c in cols:
-            if any(k.lower() in c.lower() for k in keywords): return c
-        return None
+        def clean_val(val):
+            s = str(val).replace('%', '').replace(',', '').strip()
+            return pd.to_numeric(s, errors='coerce')
 
-    # Targeting the specific variables you use for scalping and technical analysis
-    c_away = get_c(['away'])
-    c_home = get_c(['home'])
-    c_a_est = get_c(['away est', 'a_est']) # Lambda A
-    c_h_est = get_c(['home est', 'h_est']) # Lambda B
-    c_ml = get_c(['moneyml', 'ml'])        # Market Odds
-    c_hnd = get_c(['handlehnd.2', 'handle'])
-    c_bet = get_c(['betsbet.2', 'bets'])
-
-    if c_away and c_home:
-        # 4. CALCULATION LAYER
-        # We perform calculations on the whole dataframe at once for speed
-        df['Win_Prob'] = df.apply(lambda x: calculate_poisson_win_prob(to_num(x[c_a_est]), to_num(x[c_h_est])), axis=1)
-        df['EV'] = df.apply(lambda x: calculate_ev(x['Win_Prob'], to_num(x[c_ml])), axis=1)
-        df['Sharp_Diff'] = df.apply(lambda x: to_num(x[c_hnd]) - to_num(x[c_bet]), axis=1)
-
-        # 5. UI SELECTOR
-        matchups = (df[c_away] + " @ " + df[c_home]).tolist()
-        choice = st.selectbox("🎯 Select Matchup", matchups)
-        g = df[(df[c_away] + " @ " + df[c_home]) == choice].iloc[0]
-
-        # --- TACTICAL SCOUTING REPORT ---
-        st.header(f"📈 Scouting Report: {g[c_away]} @ {g[c_home]}")
+        # Calculations
+        df['Win_Prob'] = df.apply(lambda x: calculate_poisson_win_prob(
+            clean_val(x.iloc[POS_A_EST]), 
+            clean_val(x.iloc[POS_H_EST])
+        ), axis=1)
         
+        df['EV'] = df.apply(lambda x: calculate_ev(
+            x['Win_Prob'], 
+            clean_val(x.iloc[POS_ML])
+        ), axis=1)
+        
+        df['Sharp_Diff'] = clean_val(df.iloc[:, POS_HND]) - clean_val(df.iloc[:, POS_BET])
+
+        # Matchup UI
+        matchups = (df.iloc[:, POS_AWAY].astype(str) + " @ " + df.iloc[:, POS_HOME].astype(str)).tolist()
+        choice = st.selectbox("🎯 Select Matchup", matchups)
+        g = df[(df.iloc[:, POS_AWAY].astype(str) + " @ " + df.iloc[:, POS_HOME].astype(str)) == choice].iloc[0]
+
+        # Final Dashboard
+        st.header(f"📈 Scouting Report: {g.iloc[POS_AWAY]} @ {g.iloc[POS_HOME]}")
         m1, m2, m3 = st.columns(3)
         m1.metric("Model Win %", f"{g['Win_Prob']:.1%}")
         m2.metric("Edge (EV)", f"{g['EV']:.2%}")
         m3.metric("Sharp Discrepancy", f"{g['Sharp_Diff']:.0f}%")
 
         st.divider()
-        st.write(f"📊 **Projections**: {g[c_a_est]} (Away) vs {g[c_h_est]} (Home)")
-        
-        if g['EV'] > 0.08:
-            st.success("**Value Detected**: Model shows significant edge over market ML.")
-        
-        st.caption("🔄 Live sync active from Google Sheet tab [MLB]. Refreshes every 30s.")
-    else:
-        st.error("Header Mismatch: Ensure the MLB tab has columns named 'Away' and 'Home'.")
+        st.write(f"📊 **Data Source**: Using current Poisson Lambdas and Market Odds.")
+        st.caption("🔄 Data refreshed from MLB tab. Scalping-ready.")
+
+    except Exception as e:
+        st.error(f"Data Alignment Error: {e}")
+        st.info("Check if your MLB tab layout matches Columns A through N.")
 else:
-    st.info("🔄 Connecting to Sheet...")
+    st.info("🔄 Connecting to Sheet... Ensure the MLB tab has active data.")
