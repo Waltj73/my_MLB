@@ -3,9 +3,10 @@ import pandas as pd
 import numpy as np
 from scipy.stats import poisson
 
-# --- 1. CORE POISSON & EV ENGINE ---
+# --- 1. CORE MATH ENGINE ---
 def calculate_poisson_win_prob(away_lambda, home_lambda):
-    if away_lambda <= 0 or home_lambda <= 0: return 0.50
+    if pd.isna(away_lambda) or pd.isna(home_lambda) or away_lambda <= 0 or home_lambda <= 0:
+        return 0.50
     scores = np.arange(16)
     away_pmf = poisson.pmf(scores, away_lambda)
     home_pmf = poisson.pmf(scores, home_lambda)
@@ -21,63 +22,71 @@ def calculate_ev(win_prob, ml_odds):
     return (win_prob * (dec - 1)) - (1 - win_prob)
 
 # --- 2. LIVE GOOGLE SHEETS CONNECTION ---
-# Replace 'YOUR_SHEET_ID' with the actual ID from your URL
-SHEET_ID = 'YOUR_SHEET_ID_HERE' 
-SHEET_NAME = 'Sheet1' # Make sure this matches your tab name
-URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}'
+# Using your exact Sheet ID and GID for the MLB tab
+SHEET_ID = '1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0'
+GID = '1240994733'
+URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}'
 
-@st.cache_data(ttl=60) # Refreshes every 60 seconds
-def load_sheet_data():
+@st.cache_data(ttl=30) # High-frequency refresh for live trading
+def load_live_slate():
     try:
         df = pd.read_csv(URL)
-        # Clean up column names to handle spaces/cases
-        df.columns = [c.strip().replace(' ', '_') for c in df.columns]
+        # Clean column headers
+        df.columns = [str(c).strip() for c in df.columns]
         return df
     except Exception as e:
-        st.error(f"Sheet Connection Failed: {e}")
+        st.error(f"Sync Interrupted: {e}")
         return pd.DataFrame()
 
-# --- 3. UI & TACTICAL LOGIC ---
+# --- 3. DASHBOARD EXECUTION ---
 st.set_page_config(page_title="MLB Tactical Command", layout="wide")
 st.title("⚾ MLB Tactical Command Center")
 
-df = load_sheet_data()
+df = load_live_slate()
 
 if not df.empty:
-    # Use your specific column definitions
-    # Expected columns: Away, Home, Away_ML, Away_EST, Home_EST, Handle, Bets
-    df['Win_Prob'] = df.apply(lambda x: calculate_poisson_win_prob(x['Away_EST'], x['Home_EST']), axis=1)
-    df['EV'] = df.apply(lambda x: calculate_ev(x['Win_Prob'], x['Away_ML']), axis=1)
-    df['Sharp_Diff'] = df['Handle'] - df['Bets']
+    # Calculation Layer
+    # Based on your sheet, targeting 'EST Score', 'MoneyML', 'HandleHND.2', and 'BetsBET.2'
+    df['Win_Prob'] = df.apply(lambda x: calculate_poisson_win_prob(x.get('Away EST', 0), x.get('Home EST', 0)), axis=1)
+    df['EV'] = df.apply(lambda x: calculate_ev(x['Win_Prob'], x.get('MoneyML', 0)), axis=1)
+    
+    # Handle % cleaning
+    df['H_Pct'] = pd.to_numeric(df.get('HandleHND.2', '0').astype(str).str.replace('%',''), errors='coerce')
+    df['B_Pct'] = pd.to_numeric(df.get('BetsBET.2', '0').astype(str).str.replace('%',''), errors='coerce')
+    df['Sharp_Diff'] = df['H_Pct'] - df['B_Pct']
 
-    # Game Selector
-    selected_game = st.selectbox("Select Game", df['Away'] + " @ " + df['Home'])
+    # Game Selection
+    game_list = (df['Away'] + " @ " + df['Home']).tolist()
+    selected_game = st.selectbox("🎯 Select Matchup for Scouting Report", game_list)
     g = df[(df['Away'] + " @ " + df['Home']) == selected_game].iloc[0]
 
-    # --- TACTICAL REPORT ---
-    st.header(f"📈 Tactical Report: {g['Away']} @ {g['Home']}")
+    # --- TACTICAL SCOUTING REPORT ---
+    st.header(f"📈 Scouting Report: {g['Away']} @ {g['Home']}")
     
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Poisson Win %", f"{g['Win_Prob']:.1%}")
-    m2.metric("Away EV", f"{g['EV']:.2%}")
-    m3.metric("Sharp Discrepancy", f"{g['Sharp_Diff']}%")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Model Win %", f"{g['Win_Prob']:.1%}")
+    col2.metric("Edge (EV)", f"{g['EV']:.2%}")
+    col3.metric("Sharp Discrepancy", f"{g['Sharp_Diff']:.0f}%")
 
     st.divider()
     
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("🎯 Model Analysis")
-        st.write(f"Based on **{g['Away_EST']}** to **{g['Home_EST']}** lambdas.")
-        if g['EV'] > 0.05:
-            st.success(f"🎯 **Trade Signal**: Model shows edge on {g['Away']}.")
-        
-    with c2:
-        st.subheader("🐳 Sharp Notes")
-        if g['Sharp_Diff'] > 15:
-            st.warning(f"🐳 **Institutional Alert**: Sharp money backing {g['Away']}.")
-        else:
-            st.write("Market remains balanced.")
+    left, right = st.columns(2)
+    with left:
+        st.subheader("🎯 Tactical Notes")
+        st.write(f"Projections: **{g.get('Away EST')}** (Away) vs **{g.get('Home EST')}** (Home)")
+        if g['EV'] > 0.08:
+            st.success(f"**Value Alert**: High positive EV detected on {g['Away']}.")
+        elif g['EV'] < -0.08:
+            st.warning(f"**Overvalued**: Market is pricing {g['Away']} significantly higher than the Poisson model.")
 
-    st.info("📊 Data synced live from your MLB Spreadsheet.")
+    with right:
+        st.subheader("🐳 Institutional Flow")
+        if abs(g['Sharp_Diff']) > 15:
+            st.info(f"**Sharp Move**: A {g['Sharp_Diff']}% gap exists between Money and Tickets.")
+        else:
+            st.write("Market sentiment is currently balanced.")
+
+    st.caption("🔄 Data is synced directly from your MLB Google Sheet every 30 seconds.")
+
 else:
-    st.info("🔄 Awaiting Sheet Sync... Ensure your Google Sheet ID is correct.")
+    st.info("🔄 Connecting to Google Sheet... Ensure the sheet is shared as 'Anyone with the link can view'.")
