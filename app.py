@@ -8,8 +8,10 @@ def calculate_poisson_win_prob(away_lambda, home_lambda):
     if pd.isna(away_lambda) or pd.isna(home_lambda) or away_lambda <= 0 or home_lambda <= 0:
         return 0.50
     scores = np.arange(16)
-    away_pmf, home_pmf = poisson.pmf(scores, away_lambda), poisson.pmf(scores, home_lambda)
-    away_cdf, home_cdf = poisson.cdf(np.maximum(0, scores - 1), away_lambda), poisson.cdf(np.maximum(0, scores - 1), home_lambda)
+    away_pmf = poisson.pmf(scores, away_lambda)
+    home_pmf = poisson.pmf(scores, home_lambda)
+    away_cdf = poisson.cdf(np.maximum(0, scores - 1), away_lambda)
+    home_cdf = poisson.cdf(np.maximum(0, scores - 1), home_lambda)
     p_away = np.sum(away_pmf * home_cdf)
     p_home = np.sum(home_pmf * away_cdf)
     return p_away / (p_away + p_home)
@@ -19,85 +21,83 @@ def calculate_ev(win_prob, ml_odds):
     dec = (ml_odds / 100) + 1 if ml_odds > 0 else (100 / abs(ml_odds)) + 1
     return (win_prob * (dec - 1)) - (1 - win_prob)
 
-# --- 2. DATA SYNC (MLB TAB) ---
-# Your specific Google Sheet ID and MLB tab GID
+# --- 2. THE HARD-WIRED SYNC ENGINE ---
 SHEET_ID = '1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0'
-GID = '1240994733'
+GID = '1240994733' # Direct GID for the MLB Tab
 URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}'
 
 @st.cache_data(ttl=30)
-def load_data():
+def load_live_data():
     try:
-        # Load raw to find data start
-        raw = pd.read_csv(URL, header=None).fillna('')
-        start_row = 0
-        for i, row in raw.iterrows():
-            if any("away" in str(x).lower() for x in row.values):
-                start_row = i
-                break
-        df = pd.read_csv(URL, skiprows=start_row)
-        df.columns = [str(c).strip() for c in df.columns]
-        return df.dropna(how='all').reset_index(drop=True)
+        # Load the CSV, forcing all data to strings to prevent 'float' errors
+        df = pd.read_csv(URL, dtype=str).fillna('0')
+        # Clean up column headers by removing any extra spaces or quotes
+        df.columns = [str(c).strip().replace('"', '') for c in df.columns]
+        return df
     except Exception as e:
-        st.error(f"Sync Error: {e}")
+        st.error(f"Critical Connection Error: {e}")
         return pd.DataFrame()
 
-# --- 3. UI & ANALYTICAL EXECUTION ---
+# --- 3. UI & ANALYTICS ---
 st.set_page_config(page_title="MLB Tactical Command", layout="wide")
 st.title("⚾ MLB Tactical Command Center")
 
-df = load_data()
+df = load_live_data()
 
 if not df.empty:
-    # --- HARD-WIRED COLUMN MAPPING ---
-    # We find columns by keywords to stay flexible if they shift slightly
-    def find_idx(keywords):
-        for i, col in enumerate(df.columns):
-            if any(k.lower() in col.lower() for k in keywords): return i
+    # Helper: Convert data to numbers safely
+    def to_num(val):
+        try:
+            return pd.to_numeric(str(val).replace('%', '').replace(',', '').strip(), errors='coerce')
+        except:
+            return 0.0
+
+    # DYNAMIC COLUMN SEARCH (Finds your specific Poisson/EV metrics)
+    # We look for the exact names from your spreadsheet ledger
+    cols = df.columns.tolist()
+    
+    def get_c(keywords):
+        for c in cols:
+            if any(k.lower() in c.lower() for k in keywords): return c
         return None
 
-    # Targeting your specific columns for Poisson/EV/Sharp analysis
-    IDX_AWAY = find_idx(['away team', 'away'])
-    IDX_HOME = find_idx(['home team', 'home'])
-    IDX_A_EST = find_idx(['away est', 'est score']) # Column F
-    IDX_H_EST = find_idx(['home est', 'est score']) # Column G
-    IDX_ML = find_idx(['moneyml', 'money ml'])      # Column H
-    IDX_HND = find_idx(['handlehnd.2', 'handle'])   # Column M
-    IDX_BET = find_idx(['betsbet.2', 'bets'])       # Column N
+    # Targeting the specific variables you use for scalping and technical analysis
+    c_away = get_c(['away'])
+    c_home = get_c(['home'])
+    c_a_est = get_c(['away est', 'a_est']) # Lambda A
+    c_h_est = get_c(['home est', 'h_est']) # Lambda B
+    c_ml = get_c(['moneyml', 'ml'])        # Market Odds
+    c_hnd = get_c(['handlehnd.2', 'handle'])
+    c_bet = get_c(['betsbet.2', 'bets'])
 
-    def clean_num(val):
-        return pd.to_numeric(str(val).replace('%', '').replace(',', '').strip(), errors='coerce')
+    if c_away and c_home:
+        # 4. CALCULATION LAYER
+        # We perform calculations on the whole dataframe at once for speed
+        df['Win_Prob'] = df.apply(lambda x: calculate_poisson_win_prob(to_num(x[c_a_est]), to_num(x[c_h_est])), axis=1)
+        df['EV'] = df.apply(lambda x: calculate_ev(x['Win_Prob'], to_num(x[c_ml])), axis=1)
+        df['Sharp_Diff'] = df.apply(lambda x: to_num(x[c_hnd]) - to_num(x[c_bet]), axis=1)
 
-    try:
-        # Core Analytics
-        df['Win_Prob'] = df.apply(lambda x: calculate_poisson_win_prob(
-            clean_num(x.iloc[IDX_A_EST]), 
-            clean_num(x.iloc[IDX_H_EST])
-        ), axis=1)
+        # 5. UI SELECTOR
+        matchups = (df[c_away] + " @ " + df[c_home]).tolist()
+        choice = st.selectbox("🎯 Select Matchup", matchups)
+        g = df[(df[c_away] + " @ " + df[c_home]) == choice].iloc[0]
+
+        # --- TACTICAL SCOUTING REPORT ---
+        st.header(f"📈 Scouting Report: {g[c_away]} @ {g[c_home]}")
         
-        df['EV'] = df.apply(lambda x: calculate_ev(
-            x['Win_Prob'], 
-            clean_num(x.iloc[IDX_ML])
-        ), axis=1)
-        
-        df['Sharp_Diff'] = clean_num(df.iloc[:, IDX_HND]) - clean_num(df.iloc[:, IDX_BET])
-
-        # Selector UI
-        game_list = (df.iloc[:, IDX_AWAY].astype(str) + " @ " + df.iloc[:, IDX_HOME].astype(str)).tolist()
-        selected_game = st.selectbox("🎯 Select Matchup", game_list)
-        g = df[(df.iloc[:, IDX_AWAY].astype(str) + " @ " + df.iloc[:, IDX_HOME].astype(str)) == selected_game].iloc[0]
-
-        # Final Report
-        st.header(f"📈 Scouting Report: {g.iloc[IDX_AWAY]} @ {g.iloc[IDX_HOME]}")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Model Win %", f"{g['Win_Prob']:.1%}")
-        col2.metric("Edge (EV)", f"{g['EV']:.2%}")
-        col3.metric("Sharp Discrepancy", f"{g['Sharp_Diff']:.0f}%")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Model Win %", f"{g['Win_Prob']:.1%}")
+        m2.metric("Edge (EV)", f"{g['EV']:.2%}")
+        m3.metric("Sharp Discrepancy", f"{g['Sharp_Diff']:.0f}%")
 
         st.divider()
-        st.caption("🔄 Live sync: Update your Google Sheet and this dashboard refreshes in 30s.")
-
-    except Exception as e:
-        st.error(f"Alignment Failure: {e}. Check that Away/Home columns exist in your MLB tab.")
+        st.write(f"📊 **Projections**: {g[c_a_est]} (Away) vs {g[c_h_est]} (Home)")
+        
+        if g['EV'] > 0.08:
+            st.success("**Value Detected**: Model shows significant edge over market ML.")
+        
+        st.caption("🔄 Live sync active from Google Sheet tab [MLB]. Refreshes every 30s.")
+    else:
+        st.error("Header Mismatch: Ensure the MLB tab has columns named 'Away' and 'Home'.")
 else:
-    st.info("🔄 Awaiting Data Sync...")
+    st.info("🔄 Connecting to Sheet...")
