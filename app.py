@@ -15,115 +15,90 @@ def calculate_poisson_win_prob(away_lambda, home_lambda):
     return p_away / (p_away + p_home)
 
 def calculate_ev(win_prob, ml_odds):
-    if not ml_odds or pd.isna(ml_odds): return 0
+    if not ml_odds or pd.isna(ml_odds) or ml_odds == 0: return 0
     dec = (ml_odds / 100) + 1 if ml_odds > 0 else (100 / abs(ml_odds)) + 1
     return (win_prob * (dec - 1)) - (1 - win_prob)
 
-# --- 2. THE HARDENED SYNC ENGINE ---
+# --- 2. THE POSITION-BASED SYNC ---
 SHEET_ID = '1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0'
 GID = '1240994733'
 URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}'
 
 @st.cache_data(ttl=30)
-def load_live_slate():
+def load_data():
     try:
-        # Load the whole sheet raw to find where the data actually starts
-        raw_df = pd.read_csv(URL, header=None).fillna('')
+        # Load the CSV without headers first to find the starting line
+        raw = pd.read_csv(URL, header=None).fillna('')
         
-        # Step A: Find the header row by looking for "Away" or "Home" anywhere in the row
-        header_row_index = 0
-        found = False
-        for i, row in raw_df.iterrows():
-            # Clean each cell: convert to string, lower case, remove non-alphanumeric
-            row_vals = [str(x).lower().strip() for x in row.values]
-            if any("away" in val for val in row_vals) and any("home" in val for val in row_vals):
-                header_row_index = i
-                found = True
+        # Find the first row that actually looks like game data (Home/Away exists)
+        start_row = 0
+        for i, row in raw.iterrows():
+            if any("away" in str(x).lower() for x in row.values):
+                start_row = i
                 break
         
-        if not found:
-            # Fallback: If no headers found, just try to use the first row and hope for the best
-            header_row_index = 0
-
-        # Step B: Reload from that specific row
-        df = pd.read_csv(URL, skiprows=header_row_index)
-        # Clean column names strictly: remove special characters, extra spaces, and quotes
-        df.columns = [str(c).strip().replace('"', '').replace('\n', '') for c in df.columns]
+        # Reload skipping only the trash at the top
+        df = pd.read_csv(URL, skiprows=start_row)
         return df.dropna(how='all').reset_index(drop=True)
     except Exception as e:
-        st.error(f"Sync Interrupted: {e}")
+        st.error(f"Sync Error: {e}")
         return pd.DataFrame()
 
-# --- 3. UI & TACTICAL ANALYSIS ---
+# --- 3. UI EXECUTION ---
 st.set_page_config(page_title="MLB Tactical Command", layout="wide")
 st.title("⚾ MLB Tactical Command Center")
 
-df = load_live_slate()
+df = load_data()
 
 if not df.empty:
-    def find_col(keywords):
-        # Fuzzy match to handle "Away EST", "A_EST", "AwayEST", etc.
-        for col in df.columns:
-            if any(k.lower() in col.lower() for k in keywords):
-                return col
-        return None
+    # HELPER: Force column indexing by POSITION (0=A, 1=B, 2=C...)
+    # Adjusted based on standard VSiN/MLB sheet layouts
+    try:
+        # Define positions (Adjust these numbers if your sheet columns shift)
+        COL_AWAY = 0    # Col A
+        COL_HOME = 1    # Col B
+        COL_A_EST = 5   # Col F (Away EST Score)
+        COL_H_EST = 6   # Col G (Home EST Score)
+        COL_ML = 7      # Col H (MoneyML)
+        COL_HND = 12    # Col M (Handle %)
+        COL_BET = 13    # Col N (Bets %)
 
-    # Mapping your specific MLB columns
-    c_away = find_col(['away'])
-    c_home = find_col(['home'])
-    c_a_est = find_col(['away est', 'a_est', 'a est'])
-    c_h_est = find_col(['home est', 'h_est', 'h est'])
-    c_ml = find_col(['moneyml', 'ml', 'money ml'])
-    c_hnd = find_col(['handlehnd.2', 'handle', 'hnd'])
-    c_bet = find_col(['betsbet.2', 'bets', 'bet'])
+        def clean_num(val):
+            s = str(val).replace('%', '').replace(',', '').strip()
+            return pd.to_numeric(s, errors='coerce')
 
-    # Final Guardrail
-    if not c_away or not c_home:
-        st.warning("⚠️ Column detection is struggling. Showing available columns below:")
-        st.write(list(df.columns))
-        st.stop()
+        # Calculations
+        df['Win_Prob'] = df.apply(lambda x: calculate_poisson_win_prob(
+            clean_num(x.iloc[COL_A_EST]), 
+            clean_num(x.iloc[COL_H_EST])
+        ), axis=1)
+        
+        df['EV'] = df.apply(lambda x: calculate_ev(
+            x['Win_Prob'], 
+            clean_num(x.iloc[COL_ML])
+        ), axis=1)
+        
+        df['Sharp_Diff'] = clean_num(df.iloc[:, COL_HND]) - clean_num(df.iloc[:, COL_BET])
 
-    def clean_num(val):
-        # Strips % and commas, handles spaces, converts to float
-        s = str(val).replace('%', '').replace(',', '').strip()
-        return pd.to_numeric(s, errors='coerce')
+        # Matchup Selection
+        game_list = (df.iloc[:, COL_AWAY].astype(str) + " @ " + df.iloc[:, COL_HOME].astype(str)).tolist()
+        selected_game = st.selectbox("🎯 Select Matchup", game_list)
+        g = df[(df.iloc[:, COL_AWAY].astype(str) + " @ " + df.iloc[:, COL_HOME].astype(str)) == selected_game].iloc[0]
 
-    # Data Processing with your logic for EV and implied win probabilities
-    df['Win_Prob'] = df.apply(lambda x: calculate_poisson_win_prob(clean_num(x.get(c_a_est, 0)), clean_num(x.get(c_h_est, 0))), axis=1)
-    df['EV'] = df.apply(lambda x: calculate_ev(x['Win_Prob'], clean_num(x.get(c_ml, 0))), axis=1)
-    df['Sharp_Diff'] = clean_num(df.get(c_hnd, 0)) - clean_num(df.get(c_bet, 0))
+        # Scouting Report
+        st.header(f"📈 Scouting Report: {g.iloc[COL_AWAY]} @ {g.iloc[COL_HOME]}")
+        
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Model Win %", f"{g['Win_Prob']:.1%}")
+        m2.metric("Edge (EV)", f"{g['EV']:.2%}")
+        m3.metric("Sharp Discrepancy", f"{g['Sharp_Diff']:.0f}%")
 
-    # Matchup Selection
-    game_list = (df[c_away].astype(str) + " @ " + df[c_home].astype(str)).tolist()
-    selected_game = st.selectbox("🎯 Select Matchup", game_list)
-    g = df[(df[c_away].astype(str) + " @ " + df[c_home].astype(str)) == selected_game].iloc[0]
+        st.divider()
+        st.write(f"📊 **Analytical Logic**: Using implied win probabilities and EV metrics.")
+        st.caption("🔄 Live sync active. No manual pasting required.")
 
-    # --- TACTICAL SCOUTING REPORT ---
-    st.header(f"📈 Scouting Report: {g[c_away]} @ {g[c_home]}")
-    
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Model Win %", f"{g['Win_Prob']:.1%}")
-    m2.metric("Edge (EV)", f"{g['EV']:.2%}")
-    m3.metric("Sharp Discrepancy", f"{g['Sharp_Diff']:.0f}%")
-
-    st.divider()
-    
-    l, r = st.columns(2)
-    with l:
-        st.subheader("🎯 Tactical Notes")
-        # Direct reference to your EST Score lambdas
-        st.write(f"Projections: **{g.get(c_a_est)}** vs **{g.get(c_h_est)}**")
-        if g['EV'] > 0.08: st.success("**Value Alert**: High EV detected.")
-        elif g['EV'] < -0.08: st.warning("**Overvalued**: Market price exceeds model.")
-
-    with r:
-        st.subheader("🐳 Institutional Flow")
-        # Focus on "Sharp Action" discrepancies
-        if abs(g['Sharp_Diff']) > 15:
-            st.info(f"**Sharp Move**: {g['Sharp_Diff']:.0f}% money-to-ticket gap.")
-        else:
-            st.write("Market sentiment is balanced.")
-
-    st.caption("🔄 Data synced live from Google Sheet tab [MLB]. Refresh every 30s.")
+    except Exception as e:
+        st.error(f"Data Alignment Error: {e}")
+        st.info("Check if your spreadsheet columns match the expected positions.")
 else:
-    st.info("🔄 Connecting... Please ensure the 'MLB' tab in your sheet isn't empty.")
+    st.info("🔄 Awaiting Data... Ensure your 'MLB' tab is populated.")
