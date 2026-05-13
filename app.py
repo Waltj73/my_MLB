@@ -23,66 +23,81 @@ def calculate_ev(win_prob, ml_odds):
     dec = (ml_odds / 100) + 1 if ml_odds > 0 else (100 / abs(ml_odds)) + 1
     return (win_prob * (dec - 1)) - (1 - win_prob)
 
-# --- 2. MULTI-TABLE SCRAPER ---
+# --- 2. THE DUAL-SOURCE SCRAPER ---
 @st.cache_data(ttl=300)
-def fetch_multi_table_data():
+def fetch_and_merge_data():
     scraper = cloudscraper.create_scraper()
-    all_game_data = []
     
     try:
-        url = "https://data.vsin.com/betting-splits/?source=DK&sport=MLB"
-        response = scraper.get(url, timeout=10)
-        tables = pd.read_html(io.StringIO(response.text), flavor='lxml')
+        # SOURCE 1: Games Page (For EST Scores / Table 1)
+        res1 = scraper.get("https://data.vsin.com/mlb/games/", timeout=10)
+        tables_games = pd.read_html(io.StringIO(res1.text), flavor='lxml')
+        df_games_raw = tables_games[0] # Your "table 1"
+
+        # SOURCE 2: Betting Splits (For Handle & Bets / Table 1)
+        res2 = scraper.get("https://data.vsin.com/betting-splits/?source=DK&sport=MLB", timeout=10)
+        tables_splits = pd.read_html(io.StringIO(res2.text), flavor='lxml')
+        df_splits_raw = tables_splits[0] # Your "table 1"
+
+        # --- PROCESS GAMES (EST SCORES) ---
+        # Unstacking Away/Home
+        away_g = df_games_raw.iloc[::2].reset_index(drop=True)
+        home_g = df_games_raw.iloc[1::2].reset_index(drop=True)
         
-        for t in tables:
-            # Flatten columns to look for markers
-            col_list = [str(c).lower() for c in t.columns]
-            
-            # Check if this table contains game data markers
-            if any('est' in c or 'score' in c for c in col_list):
-                try:
-                    # In these small game tables, Away is row 0, Home is row 1
-                    # We find the column index for EST Score and MoneyML dynamically
-                    idx_est = next(i for i, c in enumerate(col_list) if 'est' in c)
-                    idx_ml = next(i for i, c in enumerate(col_list) if 'money' in c or 'ml' in c)
-                    idx_team = next(i for i, c in enumerate(col_list) if 'team' in c or 'matchup' in c or i == 1)
-                    
-                    game = {
-                        'Away': t.iloc[0, idx_team],
-                        'Home': t.iloc[1, idx_team],
-                        'Away_Proj': pd.to_numeric(t.iloc[0, idx_est], errors='coerce'),
-                        'Home_Proj': pd.to_numeric(t.iloc[1, idx_est], errors='coerce'),
-                        'Away_ML': pd.to_numeric(t.iloc[0, idx_ml], errors='coerce'),
-                        'Home_ML': pd.to_numeric(t.iloc[1, idx_ml], errors='coerce')
-                    }
-                    all_game_data.append(game)
-                except Exception:
-                    continue # Skip tables that don't match the format
+        games_clean = pd.DataFrame({
+            'Away': away_g.iloc[:, 1],
+            'Home': home_g.iloc[:, 1],
+            'Away_Proj': pd.to_numeric(away_g['EST Score'], errors='coerce'),
+            'Home_Proj': pd.to_numeric(home_g['EST Score'], errors='coerce'),
+            'Away_ML': pd.to_numeric(away_g['MoneyML'], errors='coerce')
+        })
+
+        # --- PROCESS SPLITS (HANDLE/BETS) ---
+        away_s = df_splits_raw.iloc[::2].reset_index(drop=True)
+        splits_clean = pd.DataFrame({
+            'Team': away_s.iloc[:, 1],
+            'Handle': pd.to_numeric(away_s['HandleHND.2'].astype(str).str.extract('(\d+)')[0], errors='coerce'),
+            'Bets': pd.to_numeric(away_s['BetsBET.2'].astype(str).str.extract('(\d+)')[0], errors='coerce')
+        })
+
+        # --- MERGE DATA ---
+        # We join the handle data onto our games list using the Away Team name
+        final = pd.merge(games_clean, splits_clean, left_on='Away', right_on='Team', how='left')
+        final['Sharp_Diff'] = final['Handle'] - final['Bets']
         
-        return pd.DataFrame(all_game_data)
+        return final.dropna(subset=['Away_Proj'])
+
     except Exception as e:
-        st.error(f"Error accessing tables: {e}")
+        st.error(f"Sync Error: {e}")
         return pd.DataFrame()
 
 # --- 3. UI DASHBOARD ---
-st.set_page_config(page_title="MLB Tactical Multi-Table", layout="wide")
-st.title("⚾ MLB Matchup Tactical Dashboard")
+st.set_page_config(page_title="MLB Dual-Source Dashboard", layout="wide")
+st.title("⚾ MLB Tactical Matchup Center")
 
-df = fetch_multi_table_data()
+df = fetch_and_merge_data()
 
 if not df.empty:
-    # Calculations
+    # Math using EST Scores pulled from your first URL
     df['Away_Win_%'] = df.apply(lambda x: calculate_poisson_win_prob(x['Away_Proj'], x['Home_Proj']), axis=1)
     df['Away_EV'] = df.apply(lambda x: calculate_ev(x['Away_Win_%'], x['Away_ML']), axis=1)
 
     st.header("🏁 Full Slate Analysis")
-    st.dataframe(df.style.format({'Away_Win_%': '{:.1%}', 'Away_EV': '{:.2%}'}), use_container_width=True)
+    view_cols = ['Away', 'Home', 'Away_ML', 'Away_Proj', 'Home_Proj', 'Away_Win_%', 'Away_EV', 'Sharp_Diff']
+    st.dataframe(
+        df[view_cols].style.format({
+            'Away_Win_%': '{:.1%}', 'Away_EV': '{:.2%}', 'Sharp_Diff': '{:+.0f}%'
+        }).background_gradient(subset=['Away_EV', 'Sharp_Diff'], cmap='RdYlGn'),
+        hide_index=True, use_container_width=True
+    )
 
     st.divider()
     st.header("🧠 Tactical Scouting Reports")
     for _, row in df.iterrows():
         with st.expander(f"Scouting Report: {row['Away']} @ {row['Home']}"):
+            sharp_team = row['Away'] if row['Sharp_Diff'] > 0 else row['Home']
+            st.write(f"🐳 **Sharp Target**: {sharp_team} ({abs(row['Sharp_Diff']):.0f}% discrepancy).")
             st.write(f"📊 **EST Scores**: {row['Away']} ({row['Away_Proj']}) | {row['Home']} ({row['Home_Proj']})")
-            st.write(f"🎯 **Model Edge**: {row['Away_EV']:.1%} EV on the Away side.")
+            st.metric("Away Poisson Win %", f"{row['Away_Win_%']:.1%}")
 else:
-    st.info("Scanning VSiN for individual game tables and EST Scores...")
+    st.info("🔄 Running Dual-Source Sync (Games + Splits)...")
