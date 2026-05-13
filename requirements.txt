@@ -6,3 +6,4 @@ MLB-StatsAPI
 streamlit-autorefresh
 cloudscraper
 requests
+lxml
