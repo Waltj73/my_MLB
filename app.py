@@ -23,62 +23,68 @@ def calculate_ev(win_prob, ml_odds):
     dec = (ml_odds / 100) + 1 if ml_odds > 0 else (100 / abs(ml_odds)) + 1
     return (win_prob * (dec - 1)) - (1 - win_prob)
 
-# --- 2. THE RESILIENT DUAL-SOURCE SCRAPER ---
+# --- 2. FUZZY TEAM MATCHING LOGIC ---
+def clean_team_name(name):
+    """Standardizes names to improve matching (e.g., 'NY Mets' -> 'METS')"""
+    name = str(name).upper().strip()
+    # Remove city names or common variations if needed
+    return name.split()[-1] # Return just the mascot name for better matching
+
+# --- 3. DUAL-SOURCE SCRAPER ---
 @st.cache_data(ttl=300)
 def fetch_and_merge_data():
     scraper = cloudscraper.create_scraper()
     try:
-        # SOURCE 1: Games Page (EST Scores)
+        # PULL GAMES (EST Scores)
         res1 = scraper.get("https://data.vsin.com/mlb/games/", timeout=10)
-        df_games_raw = pd.read_html(io.StringIO(res1.text), flavor='lxml')[0]
-
-        # SOURCE 2: Betting Splits (Handle/Bets)
+        df_games = pd.read_html(io.StringIO(res1.text), flavor='lxml')[0]
+        
+        # PULL SPLITS (Handle/Bets)
         res2 = scraper.get("https://data.vsin.com/betting-splits/?source=DK&sport=MLB", timeout=10)
-        df_splits_raw = pd.read_html(io.StringIO(res2.text), flavor='lxml')[0]
+        df_splits = pd.read_html(io.StringIO(res2.text), flavor='lxml')[0]
 
         def get_idx(df, keywords):
             for i, col in enumerate(df.columns):
-                if any(k.lower() in str(col).lower() for k in keywords): return i
-            return None
+                if any(k in str(col).lower() for k in keywords): return i
+            return 1
 
-        # --- PROCESS GAMES ---
-        idx_est = get_idx(df_games_raw, ['est score', 'estscore'])
-        idx_ml = get_idx(df_games_raw, ['money', 'ml', 'line'])
+        # Process Games
+        idx_est = get_idx(df_games, ['est'])
+        idx_ml = get_idx(df_games, ['money', 'ml'])
         
-        away_g = df_games_raw.iloc[::2].reset_index(drop=True)
-        home_g = df_games_raw.iloc[1::2].reset_index(drop=True)
+        away_g = df_games.iloc[::2].reset_index(drop=True)
+        home_g = df_games.iloc[1::2].reset_index(drop=True)
         
-        games_clean = pd.DataFrame({
-            'Away': away_g.iloc[:, 1].astype(str).str.strip(), # FORCE STRING
-            'Home': home_g.iloc[:, 1].astype(str).str.strip(),
+        games = pd.DataFrame({
+            'Away': away_g.iloc[:, 1],
+            'Home': home_g.iloc[:, 1],
             'Away_Proj': pd.to_numeric(away_g.iloc[:, idx_est], errors='coerce'),
             'Home_Proj': pd.to_numeric(home_g.iloc[:, idx_est], errors='coerce'),
-            'Away_ML': pd.to_numeric(away_g.iloc[:, idx_ml], errors='coerce')
+            'Away_ML': pd.to_numeric(away_g.iloc[:, idx_ml], errors='coerce'),
+            'Match_Key': away_g.iloc[:, 1].apply(clean_team_name)
         })
 
-        # --- PROCESS SPLITS ---
-        idx_hnd = get_idx(df_splits_raw, ['hnd', 'handle'])
-        idx_bets = get_idx(df_splits_raw, ['bet', 'count'])
+        # Process Splits
+        idx_hnd = get_idx(df_splits, ['hnd', 'handle'])
+        idx_bets = get_idx(df_splits, ['bet', 'count'])
         
-        away_s = df_splits_raw.iloc[::2].reset_index(drop=True)
-        splits_clean = pd.DataFrame({
-            'Team_Key': away_s.iloc[:, 1].astype(str).str.strip(), # FORCE STRING
+        away_s = df_splits.iloc[::2].reset_index(drop=True)
+        splits = pd.DataFrame({
+            'Split_Key': away_s.iloc[:, 1].apply(clean_team_name),
             'Handle': pd.to_numeric(away_s.iloc[:, idx_hnd].astype(str).str.extract('(\d+)')[0], errors='coerce'),
             'Bets': pd.to_numeric(away_s.iloc[:, idx_bets].astype(str).str.extract('(\d+)')[0], errors='coerce')
         })
 
-        # --- THE MERGE ---
-        # Joining on String columns to prevent the int64/str error
-        final = pd.merge(games_clean, splits_clean, left_on='Away', right_on='Team_Key', how='left')
+        # Join and Clean
+        final = pd.merge(games, splits, left_on='Match_Key', right_on='Split_Key', how='left')
         final['Sharp_Diff'] = final['Handle'] - final['Bets']
-        
         return final.dropna(subset=['Away', 'Away_Proj'])
 
     except Exception as e:
         st.error(f"Sync Error: {e}")
         return pd.DataFrame()
 
-# --- 3. UI DASHBOARD ---
+# --- 4. UI DASHBOARD ---
 st.set_page_config(page_title="MLB Tactical Dashboard", layout="wide")
 st.title("⚾ MLB Automated Tactical Dashboard")
 
@@ -104,6 +110,6 @@ if not df.empty:
             sharp_team = row['Away'] if (row['Sharp_Diff'] or 0) > 0 else row['Home']
             st.write(f"🐳 **Sharp Target**: {sharp_team} ({abs(row['Sharp_Diff'] or 0):.0f}% discrepancy).")
             st.write(f"📊 **EST Scores**: {row['Away']} ({row['Away_Proj']}) | {row['Home']} ({row['Home_Proj']})")
-            st.metric(f"{row['Away']} Poisson Win %", f"{row['Away_Win_%']:.1%}")
+            st.metric("Away Poisson Win %", f"{row['Away_Win_%']:.1%}")
 else:
-    st.info("🔄 Processing VSiN tables... Converting data types for sync.")
+    st.info("🔄 Running Final Team Sync... This will fix the '0' team values seen in image_2067d9.png.")
