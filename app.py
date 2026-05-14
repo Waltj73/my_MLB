@@ -1,518 +1,553 @@
-import html
-import numpy as np
-import pandas as pd
 import streamlit as st
+import pandas as pd
 
-st.set_page_config(page_title="my_MLB Betting Dashboard", layout="wide")
+# ============================================================
+# DATA
+# ============================================================
 
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0/export?format=csv&gid=1240994733"
+SHEET_ID = '1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0'
+GID = '0'
 
-EV_MIN = 5
-EDGE_MIN = 5
-TOP_PICK_LIMIT = 5
-
-
-def clean_text(x):
-    if pd.isna(x):
-        return ""
-    return str(x).strip()
+URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}'
 
 
-def to_float(x):
-    if pd.isna(x):
-        return np.nan
-    s = str(x).replace("%", "").replace("$", "").replace(",", "").replace("+", "").strip()
-    if s == "" or s.upper() in ["#N/A", "#VALUE!", "NAN", "NONE"]:
-        return np.nan
+@st.cache_data(ttl=15)
+def load_data():
     try:
-        return float(s)
-    except Exception:
-        return np.nan
+        df = pd.read_csv(URL, skiprows=1)
+        df.columns = [str(c).strip() for c in df.columns]
+        return df.fillna('')
+    except Exception as e:
+        st.error(f"Sync Error: {e}")
+        return pd.DataFrame()
 
 
-def to_odds(x):
-    v = to_float(x)
-    if pd.isna(v):
-        return np.nan
-    return int(v)
+# ============================================================
+# HELPERS
+# ============================================================
+
+def to_n(v):
+    try:
+        return float(str(v).replace('%', '').replace(',', '').strip())
+    except:
+        return None
 
 
-def is_dog(odds):
-    return not pd.isna(odds) and float(odds) > 0
+def normalize_team(v):
+    return str(v).strip().upper()
 
 
-@st.cache_data(ttl=300)
-def load_sheet():
-    return pd.read_csv(SHEET_URL, header=None, dtype=str)
+def first_word(v):
+    parts = str(v).strip().split()
+    return parts[0] if parts else ""
 
 
-raw = load_sheet()
+def safe_get(df, name_hint="", idx=None):
+    if name_hint and name_hint in df.columns:
+        return df[name_hint].astype(str)
+
+    if idx is not None and idx < df.shape[1]:
+        return df.iloc[:, idx].astype(str)
+
+    return pd.Series([""] * len(df), index=df.index)
 
 
-def find_header_row(df):
-    for i in range(len(df)):
-        row_vals = [clean_text(x) for x in df.iloc[i].tolist()]
-        if "Away Team" in row_vals and "Home Team" in row_vals:
-            return i
-    return None
+def edge_tier(ev):
+    if ev is None:
+        return "NO EDGE"
+    if ev >= 20:
+        return "🟢 ELITE EDGE"
+    if ev >= 15:
+        return "🔵 STRONG EDGE"
+    if ev >= 10:
+        return "🟡 VALUE EDGE"
+    return "LOW EDGE"
 
 
-def build_model_table(raw_df):
-    header_row = find_header_row(raw_df)
+def sharp_market_read(away_team, home_team, vegas_away, vegas_home, sharp_team):
+    away_line = to_n(vegas_away)
+    home_line = to_n(vegas_home)
+    sharp_team_norm = normalize_team(sharp_team)
 
-    if header_row is None:
-        st.error("Could not find the header row with Away Team / Home Team.")
-        st.stop()
+    if away_line is None or home_line is None or not sharp_team_norm:
+        return "No market read available."
 
-    group_row = header_row - 1 if header_row > 0 else header_row
-    groups = raw_df.iloc[group_row].fillna("").tolist()
-    subs = raw_df.iloc[header_row].fillna("").tolist()
+    if away_line < home_line:
+        favorite = normalize_team(away_team)
+        dog = normalize_team(home_team)
+        favorite_display = away_team
+        dog_display = home_team
+    else:
+        favorite = normalize_team(home_team)
+        dog = normalize_team(away_team)
+        favorite_display = home_team
+        dog_display = away_team
 
-    final_cols = []
-    current_group = ""
+    if sharp_team_norm == dog:
+        return (
+            f"Sharps appear to be fading the Vegas favorite ({favorite_display}) "
+            f"and taking the dog ({dog_display}). This usually points to price resistance, "
+            f"favorite inflation, or hidden value on the plus-money side."
+        )
 
-    for g, s in zip(groups, subs):
-        g = clean_text(g)
-        s = clean_text(s)
+    if sharp_team_norm == favorite:
+        return (
+            f"Sharps are backing the Vegas favorite ({favorite_display}). "
+            f"This suggests the sharper side may still see value even at the favorite price."
+        )
 
-        if g != "":
-            current_group = g
-
-        if current_group != "" and s != "":
-            final_cols.append(f"{current_group} {s}".strip())
-        elif s != "":
-            final_cols.append(s)
-        else:
-            final_cols.append(f"Blank_{len(final_cols)}")
-
-    data = raw_df.iloc[header_row + 1:].copy()
-    data.columns = final_cols
-    data = data.dropna(how="all")
-
-    return data
-
-
-sheet_df = build_model_table(raw)
-
-
-def find_col(df, possible_names):
-    cols = list(df.columns)
-
-    for name in possible_names:
-        for col in cols:
-            if col.lower().strip() == name.lower().strip():
-                return col
-
-    for name in possible_names:
-        for col in cols:
-            if name.lower().strip() in col.lower().strip():
-                return col
-
-    return None
+    return (
+        "Sharp side does not clearly match the listed favorite or underdog. "
+        "Check team naming in the sheet."
+    )
 
 
-COLS = {
-    "away_team": find_col(sheet_df, ["Teams Away Team", "Away Team"]),
-    "home_team": find_col(sheet_df, ["Teams Home Team", "Home Team"]),
+# ============================================================
+# UI
+# ============================================================
 
-    "away_runs": find_col(sheet_df, ["Projected Runs Away", "Away Runs", "Away Proj Score"]),
-    "home_runs": find_col(sheet_df, ["Projected Runs Home", "Home Runs", "Home Proj Score"]),
+st.set_page_config(
+    page_title="MLB Command Center",
+    layout="wide"
+)
 
-    "away_odds": find_col(sheet_df, ["Vegas Odds Away"]),
-    "home_odds": find_col(sheet_df, ["Vegas Odds Home"]),
+st.title("⚾ 2026 MLB Tactical Command Center")
 
-    "away_my_odds": find_col(sheet_df, ["My Odds Away"]),
-    "home_my_odds": find_col(sheet_df, ["My Odds Home"]),
+df = load_data()
 
-    "sharp_away": find_col(sheet_df, ["Sharps ML Away", "Sharp ML Away"]),
-    "sharp_home": find_col(sheet_df, ["Sharps ML Home", "Sharp ML Home"]),
-    "sharp_dog": find_col(sheet_df, ["Sharp Dogs", "Sharp Dog"]),
-
-    "away_vegas_win": find_col(sheet_df, ["Vegas Win% Away", "Vegas Win % Away"]),
-    "home_vegas_win": find_col(sheet_df, ["Vegas Win% Home", "Vegas Win % Home"]),
-
-    "away_my_win": find_col(sheet_df, ["My Win% Away", "My Win % Away"]),
-    "home_my_win": find_col(sheet_df, ["My Win% Home", "My Win % Home"]),
-
-    "away_diff": find_col(sheet_df, ["Differences Away"]),
-    "home_diff": find_col(sheet_df, ["Differences Home"]),
-
-    "away_ev": find_col(sheet_df, ["EV Away", "My Expected Value Away"]),
-    "home_ev": find_col(sheet_df, ["EV Home", "My Expected Value Home"]),
-}
-
-
-def require_cols():
-    missing = [k for k, v in COLS.items() if v is None and k not in ["sharp_away", "sharp_home", "sharp_dog"]]
-    if missing:
-        st.error(f"Missing required columns: {missing}")
-        st.write("Detected columns:")
-        st.write(list(sheet_df.columns))
-        st.stop()
-
-
-require_cols()
-
-
-def parse_games(df):
-    games = []
-
-    for _, row in df.iterrows():
-        away_team = clean_text(row[COLS["away_team"]])
-        home_team = clean_text(row[COLS["home_team"]])
-
-        if away_team == "" or home_team == "":
-            continue
-
-        if away_team.lower() in ["away team", "teams"] or home_team.lower() in ["home team"]:
-            continue
-
-        games.append({
-            "Away Team": away_team,
-            "Home Team": home_team,
-
-            "Away Runs": to_float(row[COLS["away_runs"]]),
-            "Home Runs": to_float(row[COLS["home_runs"]]),
-
-            "Away Odds": to_odds(row[COLS["away_odds"]]),
-            "Home Odds": to_odds(row[COLS["home_odds"]]),
-
-            "Away My Odds": to_odds(row[COLS["away_my_odds"]]),
-            "Home My Odds": to_odds(row[COLS["home_my_odds"]]),
-
-            "Sharp Away": to_float(row[COLS["sharp_away"]]) if COLS["sharp_away"] else 0,
-            "Sharp Home": to_float(row[COLS["sharp_home"]]) if COLS["sharp_home"] else 0,
-            "Sharp Dog": clean_text(row[COLS["sharp_dog"]]) if COLS["sharp_dog"] else "",
-
-            "Away Vegas Win %": to_float(row[COLS["away_vegas_win"]]),
-            "Home Vegas Win %": to_float(row[COLS["home_vegas_win"]]),
-
-            "Away My Win %": to_float(row[COLS["away_my_win"]]),
-            "Home My Win %": to_float(row[COLS["home_my_win"]]),
-
-            "Away Diff": to_float(row[COLS["away_diff"]]),
-            "Home Diff": to_float(row[COLS["home_diff"]]),
-
-            "Away EV": to_float(row[COLS["away_ev"]]),
-            "Home EV": to_float(row[COLS["home_ev"]]),
-        })
-
-    return pd.DataFrame(games)
-
-
-results_df = parse_games(sheet_df)
-
-if results_df.empty:
-    st.error("No games found after parsing the sheet.")
+if df.empty:
+    st.info("🔄 Syncing...")
     st.stop()
 
 
-def get_pick_info(row):
-    away_ev = row["Away EV"]
-    home_ev = row["Home EV"]
-    away_diff = row["Away Diff"]
-    home_diff = row["Home Diff"]
+# ============================================================
+# MAIN
+# ============================================================
 
-    away_play = away_ev > EV_MIN and away_diff >= EDGE_MIN
-    home_play = home_ev > EV_MIN and home_diff >= EDGE_MIN
+try:
 
-    if away_play and (away_ev >= home_ev or not home_play):
-        return pd.Series({
-            "Pick": row["Away Team"],
-            "Pick Side": "Away",
-            "Pick Odds": row["Away Odds"],
-            "Pick EV": away_ev,
-            "Pick Diff": away_diff,
-            "Pick Win %": row["Away My Win %"],
-            "Pick Vegas Win %": row["Away Vegas Win %"],
-            "Pick Sharp": row["Sharp Away"],
-            "Dog Pick": is_dog(row["Away Odds"]),
-        })
+    main_df = df[
+        df.iloc[:, 0].astype(str).str.len() > 2
+    ].copy().reset_index(drop=True)
 
-    if home_play and (home_ev > away_ev or not away_play):
-        return pd.Series({
-            "Pick": row["Home Team"],
-            "Pick Side": "Home",
-            "Pick Odds": row["Home Odds"],
-            "Pick EV": home_ev,
-            "Pick Diff": home_diff,
-            "Pick Win %": row["Home My Win %"],
-            "Pick Vegas Win %": row["Home Vegas Win %"],
-            "Pick Sharp": row["Sharp Home"],
-            "Dog Pick": is_dog(row["Home Odds"]),
-        })
+    away_team = safe_get(main_df, "Away Team", 0)
+    home_team = safe_get(main_df, "Home Team", 1)
 
-    return pd.Series({
-        "Pick": "PASS",
-        "Pick Side": "Pass",
-        "Pick Odds": np.nan,
-        "Pick EV": max(away_ev, home_ev),
-        "Pick Diff": max(away_diff, home_diff),
-        "Pick Win %": np.nan,
-        "Pick Vegas Win %": np.nan,
-        "Pick Sharp": 0,
-        "Dog Pick": False,
+    vegas_away = safe_get(main_df, "Vegas Away", 4)
+    vegas_home = safe_get(main_df, "Vegas Home", 5)
+
+    sharp_ml_away = safe_get(main_df, "Sharp ML Away", 13)
+    sharp_ml_home = safe_get(main_df, "Sharp ML Home", 14)
+
+    sharp_dog = safe_get(main_df, "Sharp Dog", 15)
+
+    win_away = safe_get(main_df, "My Win Away", 18)
+    win_home = safe_get(main_df, "My Win Home", 19)
+
+    ev_away = pd.to_numeric(
+        safe_get(main_df, "EV Away", 22),
+        errors="coerce"
+    )
+
+    ev_home = pd.to_numeric(
+        safe_get(main_df, "EV Home", 23),
+        errors="coerce"
+    )
+
+    pick_team = safe_get(main_df, "Pick Team", 25)
+    pick_side = safe_get(main_df, "Pick Side", 26)
+
+    master_table = pd.DataFrame({
+        "Matchup": away_team + " @ " + home_team,
+        "Away Team": away_team,
+        "Home Team": home_team,
+        "Vegas Away": vegas_away,
+        "Vegas Home": vegas_home,
+        "Sharp ML Away": sharp_ml_away,
+        "Sharp ML Home": sharp_ml_home,
+        "Sharp Dog": sharp_dog,
+        "My Win Away": win_away,
+        "My Win Home": win_home,
+        "EV Away": ev_away,
+        "EV Home": ev_home,
+        "Model Pick": pick_team + " " + pick_side,
     })
 
+    high_ev_mask = (
+        (master_table["EV Away"] > 10) |
+        (master_table["EV Home"] > 10)
+    )
 
-def grade_play(ev, diff):
-    if ev >= 20 and diff >= 10:
-        return "Strong Play"
-    if ev >= 10 and diff >= 5:
-        return "Playable"
-    if ev > 5:
-        return "Lean"
-    return "Pass"
+    sharp_mask = (
+        master_table["Sharp Dog"]
+        .astype(str)
+        .str.strip()
+        .str.len() > 1
+    )
 
+    signal_count = 0
 
-pick_info = results_df.apply(get_pick_info, axis=1)
-results_df = pd.concat([results_df, pick_info], axis=1)
-results_df["Pick Grade"] = results_df.apply(lambda r: grade_play(r["Pick EV"], r["Pick Diff"]), axis=1)
+    for idx, row in master_table.iterrows():
+        sharp_team = normalize_team(row["Sharp Dog"])
+        model_team = normalize_team(first_word(row["Model Pick"]))
 
+        if sharp_team and model_team and sharp_team == model_team and high_ev_mask.iloc[idx]:
+            signal_count += 1
 
-def cell_style(col, val):
-    try:
-        v = float(val)
-    except Exception:
-        v = None
+    # ========================================================
+    # METRICS
+    # ========================================================
 
-    if col in ["Away EV", "Home EV", "Pick EV", "Away Diff", "Home Diff", "Pick Diff"] and v is not None:
-        if v >= 20:
-            return "background:#0f9d58;color:white;font-weight:bold;"
-        if v >= 10:
-            return "background:#b7e1cd;color:black;font-weight:bold;"
-        if v > 0:
-            return "background:#fff2cc;color:black;"
-        if v < 0:
-            return "background:#f4c7c3;color:black;"
+    c1, c2, c3, c4 = st.columns(4)
 
-    if col == "Pick":
-        if val != "PASS":
-            return "background:#0f9d58;color:white;font-weight:bold;"
-        return "background:#eeeeee;color:#777;"
+    c1.metric("Games", len(master_table))
+    c2.metric("Sharp Targets", int(sharp_mask.sum()))
+    c3.metric("High EV", int(high_ev_mask.sum()))
+    c4.metric("Signal Plays", signal_count)
 
-    if col == "Pick Grade":
-        if val == "Strong Play":
-            return "background:#0f9d58;color:white;font-weight:bold;"
-        if val == "Playable":
-            return "background:#b7e1cd;color:black;font-weight:bold;"
-        if val == "Lean":
-            return "background:#fff2cc;color:black;"
-        return "background:#eeeeee;color:#777;"
+    # ========================================================
+    # TABS
+    # ========================================================
 
-    return ""
+    board_tab, sharp_tab, ev_tab, signal_tab = st.tabs([
+        "📋 Tactical Board",
+        "🔥 Sharp Money",
+        "📈 High EV",
+        "🎯 Signal Plays"
+    ])
 
+    # ========================================================
+    # BOARD TAB
+    # ========================================================
 
-def fmt_value(col, val):
-    if pd.isna(val):
-        return ""
+    with board_tab:
 
-    if isinstance(val, (float, int, np.integer, np.floating)):
-        if "%" in col or "Diff" in col or "Sharp" in col:
-            return f"{val:.2f}%"
-        if "EV" in col:
-            return f"{val:.2f}"
-        if "Odds" in col:
-            return f"{int(val)}"
-        return f"{val:.2f}"
+        st.subheader("📋 Full Tactical Board")
 
-    return str(val)
+        board_view = master_table[[
+            "Matchup",
+            "Vegas Away",
+            "Vegas Home",
+            "Sharp ML Away",
+            "Sharp ML Home",
+            "Sharp Dog",
+            "My Win Away",
+            "My Win Home",
+            "EV Away",
+            "EV Home",
+            "Model Pick"
+        ]]
 
+        def style_tactical_board(row):
+            styles = [''] * len(row)
 
-def render_colored_table(df):
-    table = """
-    <style>
-    table.mlb-table {
-        border-collapse: collapse;
-        width: 100%;
-        font-size: 13px;
-    }
-    table.mlb-table th {
-        background: #111827;
-        color: white;
-        padding: 7px;
-        border: 1px solid #d1d5db;
-        text-align: center;
-        position: sticky;
-        top: 0;
-        z-index: 2;
-    }
-    table.mlb-table td {
-        padding: 6px;
-        border: 1px solid #d1d5db;
-        text-align: center;
-    }
-    </style>
-    <div style="overflow-x:auto; max-height:700px;">
-    <table class="mlb-table">
-    <thead><tr>
-    """
+            sharp_dog_norm = normalize_team(row["Sharp Dog"])
+            model_team_norm = normalize_team(first_word(row["Model Pick"]))
 
-    for col in df.columns:
-        table += f"<th>{html.escape(str(col))}</th>"
+            ev_a = to_n(row["EV Away"])
+            ev_h = to_n(row["EV Home"])
 
-    table += "</tr></thead><tbody>"
+            high_ev = (
+                (ev_a is not None and ev_a > 10) or
+                (ev_h is not None and ev_h > 10)
+            )
 
-    for _, row in df.iterrows():
-        table += "<tr>"
-        for col in df.columns:
-            val = row[col]
-            style = cell_style(col, val)
-            text = fmt_value(col, val)
-            table += f'<td style="{style}">{html.escape(text)}</td>'
-        table += "</tr>"
+            aligned = (
+                sharp_dog_norm and
+                model_team_norm and
+                sharp_dog_norm == model_team_norm
+            )
 
-    table += "</tbody></table></div>"
-    st.markdown(table, unsafe_allow_html=True)
+            col_map = {
+                "Sharp Dog": 5,
+                "EV Away": 8,
+                "EV Home": 9,
+                "Model Pick": 10
+            }
 
+            if sharp_dog_norm:
+                styles[col_map["Sharp Dog"]] = (
+                    "background-color:#d1e7ff;"
+                    "color:#004085;"
+                    "font-weight:bold;"
+                )
 
-def sharp_comment(team, sharp_value):
-    try:
-        sharp_value = float(sharp_value)
-    except Exception:
-        sharp_value = 0
+            if model_team_norm:
+                styles[col_map["Model Pick"]] = (
+                    "background-color:#c6efce;"
+                    "color:#006100;"
+                    "font-weight:bold;"
+                )
 
-    if sharp_value >= 20:
-        return f"Strong sharp support is showing on {team}."
-    if sharp_value >= 10:
-        return f"Moderate sharp support is showing on {team}."
-    if sharp_value <= -20:
-        return f"There is heavy sharp resistance against {team}."
-    if sharp_value <= -10:
-        return f"There is some sharp resistance against {team}."
+            if ev_a is not None and ev_a > 10:
+                styles[col_map["EV Away"]] = (
+                    "background-color:#fff3cd;"
+                    "color:#856404;"
+                    "font-weight:bold;"
+                )
 
-    return "No major sharp signal detected."
+            if ev_h is not None and ev_h > 10:
+                styles[col_map["EV Home"]] = (
+                    "background-color:#fff3cd;"
+                    "color:#856404;"
+                    "font-weight:bold;"
+                )
 
+            if aligned and high_ev:
+                styles = [
+                    "background-color:#d4edda;"
+                    "color:#155724;"
+                    "font-weight:bold;"
+                ] * len(row)
 
-def generate_writeup(row):
-    if row["Pick"] == "PASS":
-        return f"""
-### {row['Away Team']} vs {row['Home Team']}
+            return styles
 
-**PASS**
+        st.dataframe(
+            board_view.style.apply(style_tactical_board, axis=1),
+            use_container_width=True,
+            hide_index=True,
+            height=700
+        )
 
-This game does not meet the current EV and difference thresholds.
+    # ========================================================
+    # SHARP TAB
+    # ========================================================
+
+    with sharp_tab:
+
+        st.subheader("🔥 Sharp Money Targets")
+
+        sharp_rows = master_table[sharp_mask]
+
+        if sharp_rows.empty:
+            st.warning("No sharp money targets found.")
+
+        for idx, row in sharp_rows.iterrows():
+
+            sharp_team = normalize_team(row["Sharp Dog"])
+            model_team = normalize_team(first_word(row["Model Pick"]))
+
+            aligned = (
+                sharp_team and model_team and sharp_team == model_team
+            )
+
+            away_ev = row["EV Away"]
+            home_ev = row["EV Home"]
+
+            best_ev = max(
+                away_ev if pd.notna(away_ev) else -999,
+                home_ev if pd.notna(home_ev) else -999
+            )
+
+            market_read = sharp_market_read(
+                row["Away Team"],
+                row["Home Team"],
+                row["Vegas Away"],
+                row["Vegas Home"],
+                row["Sharp Dog"]
+            )
+
+            if aligned:
+                box = st.success
+                signal = "Sharps and model align."
+            else:
+                box = st.warning
+                signal = "Sharp side lacks model confirmation."
+
+            box(
+                f"""
+### {row['Matchup']}
+
+**Sharp Side:** {sharp_team}  
+**Model Pick:** {row['Model Pick'] if str(row['Model Pick']).strip() else 'NO PICK'}  
+**Read:** {signal}
+
+**Market Read:**  
+{market_read}
+
+**Vegas:**  
+{row['Away Team']} {row['Vegas Away']}  
+{row['Home Team']} {row['Vegas Home']}
+
+**Sharp ML %:**  
+{row['Away Team']} {row['Sharp ML Away']}  
+{row['Home Team']} {row['Sharp ML Home']}
+
+**My Win %:**  
+{row['Away Team']} {row['My Win Away']}  
+{row['Home Team']} {row['My Win Home']}
+
+**EV:**  
+{row['Away Team']} {row['EV Away']:.2f}%  
+{row['Home Team']} {row['EV Home']:.2f}%
+
+**Tier:** {edge_tier(best_ev)}
 """
+            )
 
-    team = row["Pick"]
-    opponent = row["Home Team"] if row["Pick Side"] == "Away" else row["Away Team"]
+    # ========================================================
+    # EV TAB
+    # ========================================================
 
-    dog_note = (
-        "This is an underdog value play."
-        if row["Dog Pick"]
-        else "This is a favorite play with model support."
-    )
+    with ev_tab:
 
-    if row["Sharp Dog"] == team:
-        sharp_dog_note = f"The sharp dog column also points toward {team}, which adds confirmation."
-    elif row["Sharp Dog"] != "":
-        sharp_dog_note = f"The sharp dog column points toward {row['Sharp Dog']}, so this game has some market tension."
-    else:
-        sharp_dog_note = "There is no listed sharp dog signal for this matchup."
+        st.subheader("📈 High EV Model Plays")
 
-    return f"""
-### {row['Away Team']} vs {row['Home Team']}
+        ev_rows = master_table[high_ev_mask]
 
-## Pick: {team} ML ({int(row['Pick Odds'])})
+        if ev_rows.empty:
+            st.warning("No high EV plays found.")
 
-**Grade:** {row['Pick Grade']}
+        for idx, row in ev_rows.iterrows():
 
-### Model vs Market
+            away_ev = row["EV Away"]
+            home_ev = row["EV Home"]
 
-- Vegas Win %: **{row['Pick Vegas Win %']:.2f}%**
-- Model Win %: **{row['Pick Win %']:.2f}%**
-- Difference: **{row['Pick Diff']:.2f}%**
-- Expected Value: **{row['Pick EV']:.2f}**
-- Sharp ML: **{row['Pick Sharp']:.2f}%**
-- Sharp Dog: **{row['Sharp Dog'] if row['Sharp Dog'] else "None"}**
+            if pd.notna(away_ev) and (pd.isna(home_ev) or away_ev >= home_ev):
+                edge_team = row["Away Team"]
+                edge_ev = away_ev
+                edge_line = row["Vegas Away"]
+                edge_win = row["My Win Away"]
+            else:
+                edge_team = row["Home Team"]
+                edge_ev = home_ev
+                edge_line = row["Vegas Home"]
+                edge_win = row["My Win Home"]
 
-### Read
+            sharp_team = normalize_team(row["Sharp Dog"])
+            model_team = normalize_team(first_word(row["Model Pick"]))
 
-{dog_note}
+            sharp_confirmed = (
+                sharp_team and sharp_team == normalize_team(edge_team)
+            )
 
-Your model prices {team} better than the market does. The edge over Vegas is **{row['Pick Diff']:.2f}%**, with an EV of **{row['Pick EV']:.2f}**.
+            model_confirmed = (
+                model_team and model_team == normalize_team(edge_team)
+            )
 
-Against {opponent}, this qualifies because both the EV and difference thresholds are met.
+            market_read = sharp_market_read(
+                row["Away Team"],
+                row["Home Team"],
+                row["Vegas Away"],
+                row["Vegas Home"],
+                row["Sharp Dog"]
+            )
 
-### Sharp Money
+            if sharp_confirmed and model_confirmed:
+                confirmation = "Sharps, model, and EV all align."
+                box = st.success
+            elif model_confirmed:
+                confirmation = "Model agrees with EV, but sharp confirmation is missing."
+                box = st.info
+            elif sharp_confirmed:
+                confirmation = "Sharps agree with EV, but the model pick may differ."
+                box = st.warning
+            else:
+                confirmation = "EV exists with limited confirmation."
+                box = st.warning
 
-{sharp_comment(team, row['Pick Sharp'])}
+            box(
+                f"""
+### {edge_tier(edge_ev)} — {row['Matchup']}
 
-{sharp_dog_note}
+**Edge Side:** {edge_team}  
+**Expected Value:** {edge_ev:.2f}%  
+**Vegas Line:** {edge_line}  
+**My Win %:** {edge_win}
 
-### Risk Notes
+**Model Pick:** {row['Model Pick'] if str(row['Model Pick']).strip() else 'NO PICK'}  
+**Sharp Side:** {sharp_team if sharp_team else 'NONE'}
 
-- MLB variance is high.
-- Avoid forcing every edge into a parlay.
-- Strong favorites can still be overpriced.
-- Underdogs carry more volatility.
+**Market Read:**  
+{market_read}
+
+**Full Breakdown**
+
+{row['Away Team']}  
+Vegas: {row['Vegas Away']}  
+Win %: {row['My Win Away']}  
+EV: {row['EV Away']:.2f}%
+
+{row['Home Team']}  
+Vegas: {row['Vegas Home']}  
+Win %: {row['My Win Home']}  
+EV: {row['EV Home']:.2f}%
+
+**Analysis:** {confirmation}
 """
+            )
 
+    # ========================================================
+    # SIGNAL TAB
+    # ========================================================
 
-st.title("⚾ my_MLB Betting Dashboard")
-st.caption("Pulled directly from Google Sheets. No upload needed.")
+    with signal_tab:
 
-main_tab, top_tab, dogs_tab, writeups_tab, dog_writeups_tab = st.tabs([
-    "All Games",
-    "Top 5 Picks",
-    "Top Underdogs",
-    "Pick Writeups",
-    "Dog Writeups",
-])
+        st.subheader("🎯 Signal Plays")
 
-with main_tab:
-    st.subheader("All Games")
-    render_colored_table(results_df)
+        found_signal = False
 
-with top_tab:
-    st.subheader("Top 5 Picks")
-    top_picks = (
-        results_df[results_df["Pick"] != "PASS"]
-        .sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
-        .head(TOP_PICK_LIMIT)
-    )
+        for idx, row in master_table.iterrows():
 
-    if top_picks.empty:
-        st.info("No picks met the current filters.")
-    else:
-        render_colored_table(top_picks)
+            if not high_ev_mask.iloc[idx]:
+                continue
 
-with dogs_tab:
-    st.subheader("Top Underdog Picks")
-    dog_picks = (
-        results_df[(results_df["Pick"] != "PASS") & (results_df["Dog Pick"] == True)]
-        .sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
-    )
+            sharp_team = normalize_team(row["Sharp Dog"])
+            model_team = normalize_team(first_word(row["Model Pick"]))
 
-    if dog_picks.empty:
-        st.info("No underdog picks met the current filters.")
-    else:
-        render_colored_table(dog_picks)
+            if not sharp_team or not model_team:
+                continue
 
-with writeups_tab:
-    st.subheader("Detailed Writeups for Picks")
-    writeup_games = (
-        results_df[results_df["Pick"] != "PASS"]
-        .sort_values(by="Pick EV", ascending=False)
-    )
+            if sharp_team != model_team:
+                continue
 
-    if writeup_games.empty:
-        st.info("No writeups because no picks met the current filters.")
+            found_signal = True
 
-    for _, row in writeup_games.iterrows():
-        st.markdown(generate_writeup(row))
-        st.divider()
+            away_ev = row["EV Away"]
+            home_ev = row["EV Home"]
 
-with dog_writeups_tab:
-    st.subheader("Detailed Underdog Writeups")
-    dog_writeups = (
-        results_df[(results_df["Pick"] != "PASS") & (results_df["Dog Pick"] == True)]
-        .sort_values(by="Pick EV", ascending=False)
-    )
+            best_ev = max(
+                away_ev if pd.notna(away_ev) else -999,
+                home_ev if pd.notna(home_ev) else -999
+            )
 
-    if dog_writeups.empty:
-        st.info("No underdog picks met the current filters.")
+            market_read = sharp_market_read(
+                row["Away Team"],
+                row["Home Team"],
+                row["Vegas Away"],
+                row["Vegas Home"],
+                row["Sharp Dog"]
+            )
 
-    for _, row in dog_writeups.iterrows():
-        st.markdown(generate_writeup(row))
-        st.divider()
+            st.success(
+                f"""
+### 🎯 {edge_tier(best_ev)} SIGNAL — {row['Matchup']}
+
+**Play Side:** {model_team}  
+**Model Pick:** {row['Model Pick']}  
+**Sharp Side:** {sharp_team}
+
+**Vegas:**  
+{row['Away Team']} {row['Vegas Away']}  
+{row['Home Team']} {row['Vegas Home']}
+
+**My Win %:**  
+{row['Away Team']} {row['My Win Away']}  
+{row['Home Team']} {row['My Win Home']}
+
+**EV:**  
+{row['Away Team']} {row['EV Away']:.2f}%  
+{row['Home Team']} {row['EV Home']:.2f}%
+
+**Market Read:**  
+{market_read}
+
+**Read:** This is a confluence play because sharp side, model pick, and positive EV are all present.
+"""
+            )
+
+        if not found_signal:
+            st.warning("No signal plays found.")
+
+except Exception as e:
+    st.error(f"Logic Error: {e}")
