@@ -217,7 +217,7 @@ for _, row in results_df.iterrows():
     st.markdown(generate_game_writeup(row))
     st.divider()
 
-```
+
 
 ---
 
@@ -238,15 +238,15 @@ This version automatically generates:
 
 Replace this:
 
-```python
+
 results_df = pd.DataFrame(data)
-```
+
 
 with:
 
-```python
+
 results_df = YOUR_REAL_MODEL_DF
-```
+
 
 using your real Google Sheet or calculation engine.
 
@@ -271,7 +271,7 @@ Away EV
 Home EV
 Sharp Away
 Sharp Home
-```
+
 
 ---
 
