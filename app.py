@@ -1,502 +1,198 @@
 import streamlit as st
 import pandas as pd
 
-# ============================================================
-# PAGE CONFIG
-# ============================================================
-
-st.set_page_config(
-    page_title="MLB Command Center",
-    layout="wide"
-)
-
-# ============================================================
-# DATA
-# ============================================================
+st.set_page_config(page_title="MLB Command Center", layout="wide")
 
 SHEET_ID = "1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0"
-GID = "0"
-
-URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
+SHEET_NAME = "APP_EXPORT"
+URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}"
 
 EV_THRESHOLD = 5
 DIFF_THRESHOLD = 5
-HIGH_EV_THRESHOLD = 10
 
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=30)
 def load_data():
+    df = pd.read_csv(URL)
+    df.columns = [str(c).strip() for c in df.columns]
+    return df.fillna("")
+
+
+def to_num(v):
     try:
-        df = pd.read_csv(URL, skiprows=1)
-        df.columns = [str(c).strip() for c in df.columns]
-        return df.fillna("")
-    except Exception as e:
-        st.error(f"Sync Error: {e}")
-        return pd.DataFrame()
-
-
-# ============================================================
-# HELPERS
-# ============================================================
-
-def to_n(v):
-    try:
-        return float(str(v).replace("%", "").replace(",", "").replace("+", "").strip())
+        return float(str(v).replace("%", "").replace("+", "").replace(",", "").strip())
     except Exception:
-        return None
+        return 0.0
 
 
-def normalize_team(v):
+def normalize(v):
     return str(v).strip().upper()
 
 
-def safe_get(df, name_hint="", idx=None):
-    if name_hint and name_hint in df.columns:
-        return df[name_hint].astype(str)
+def get_pick(row):
+    away_ev = to_num(row["Away EV"])
+    home_ev = to_num(row["Home EV"])
+    away_diff = to_num(row["Away Diff"])
+    home_diff = to_num(row["Home Diff"])
 
-    if idx is not None and idx < df.shape[1]:
-        return df.iloc[:, idx].astype(str)
+    away_play = away_ev > EV_THRESHOLD and away_diff >= DIFF_THRESHOLD
+    home_play = home_ev > EV_THRESHOLD and home_diff >= DIFF_THRESHOLD
 
-    return pd.Series([""] * len(df), index=df.index)
-
-
-def edge_tier(ev):
-    if ev is None:
-        return "NO EDGE"
-    if ev >= 20:
-        return "🟢 ELITE EDGE"
-    if ev >= 15:
-        return "🔵 STRONG EDGE"
-    if ev >= 10:
-        return "🟡 VALUE EDGE"
-    if ev >= 5:
-        return "⚪ SMALL EDGE"
-    return "NO EDGE"
-
-
-def sharp_market_read(away_team, home_team, vegas_away, vegas_home, sharp_team):
-    away_line = to_n(vegas_away)
-    home_line = to_n(vegas_home)
-    sharp_team_norm = normalize_team(sharp_team)
-
-    if away_line is None or home_line is None or not sharp_team_norm:
-        return "No clear sharp side is listed for this matchup."
-
-    if away_line < home_line:
-        favorite_display = away_team
-        dog_display = home_team
-    else:
-        favorite_display = home_team
-        dog_display = away_team
-
-    if sharp_team_norm == normalize_team(dog_display):
-        return (
-            f"Sharps appear to be fading the Vegas favorite ({favorite_display}) "
-            f"and taking the dog ({dog_display})."
-        )
-
-    if sharp_team_norm == normalize_team(favorite_display):
-        return (
-            f"Sharps are backing the Vegas favorite ({favorite_display})."
-        )
-
-    return "Sharp side does not clearly match the listed favorite or underdog."
-
-
-def calculate_model_pick(row):
-    away_ev = row["EV Away"]
-    home_ev = row["EV Home"]
-
-    away_diff = to_n(row["Diff Away"])
-    home_diff = to_n(row["Diff Home"])
-
-    away_ev_ok = pd.notna(away_ev) and away_ev > EV_THRESHOLD and away_diff is not None and away_diff >= DIFF_THRESHOLD
-    home_ev_ok = pd.notna(home_ev) and home_ev > EV_THRESHOLD and home_diff is not None and home_diff >= DIFF_THRESHOLD
-
-    if away_ev_ok and (not home_ev_ok or away_ev >= home_ev):
+    if away_play and (away_ev >= home_ev or not home_play):
         return row["Away Team"], "Away", away_ev, away_diff
 
-    if home_ev_ok and (not away_ev_ok or home_ev > away_ev):
+    if home_play and (home_ev > away_ev or not away_play):
         return row["Home Team"], "Home", home_ev, home_diff
 
-    return "PASS", "Pass", max(
-        away_ev if pd.notna(away_ev) else -999,
-        home_ev if pd.notna(home_ev) else -999
-    ), max(
-        away_diff if away_diff is not None else -999,
-        home_diff if home_diff is not None else -999
-    )
+    return "PASS", "Pass", max(away_ev, home_ev), max(away_diff, home_diff)
 
 
-# ============================================================
-# WRITEUPS
-# ============================================================
+def grade(ev, diff):
+    if ev >= 20 and diff >= 10:
+        return "Strong Play"
+    if ev >= 10 and diff >= 5:
+        return "Playable"
+    if ev > 5:
+        return "Lean"
+    return "Pass"
 
-def write_ev_card(row):
-    pick = row["Model Pick"]
 
-    if pick == "PASS":
+def writeup(row):
+    if row["Model Pick"] == "PASS":
         return f"""
-### {row['Matchup']}
+### {row['Away Team']} @ {row['Home Team']}
 
 **PASS**
 
-No clean model edge based on EV and Diff thresholds.
+No clean model edge. Neither side meets the EV + Diff threshold.
 """
 
-    sharp_team = normalize_team(row["Sharp Dog"])
-    pick_norm = normalize_team(pick)
+    pick = row["Model Pick"]
+    sharp = str(row.get("Sharp Dog", "")).strip()
 
-    if sharp_team and sharp_team == pick_norm:
-        sharp_read = "Sharp side and model pick are aligned."
-    elif sharp_team:
-        sharp_read = f"Sharp side points to {row['Sharp Dog']}, while the model points to {pick}. This is a conflict."
+    if normalize(pick) == normalize(sharp):
+        sharp_read = "Sharp side and model pick are aligned. This is a cleaner signal."
+    elif sharp:
+        sharp_read = f"Sharp side points to **{sharp}**, while the model points to **{pick}**. This is a conflict spot."
     else:
-        sharp_read = "No sharp dog signal listed."
-
-    market_read = sharp_market_read(
-        row["Away Team"],
-        row["Home Team"],
-        row["Vegas Away"],
-        row["Vegas Home"],
-        row["Sharp Dog"]
-    )
+        sharp_read = "No sharp dog signal listed. This is mostly a model-based play."
 
     return f"""
-### 📈 {edge_tier(row['Pick EV'])} — {row['Matchup']}
+### {row['Away Team']} @ {row['Home Team']}
 
-**Model Pick:** {pick}  
-**Side:** {row['Pick Side']}  
-**EV:** {row['Pick EV']:.2f}%  
-**Diff:** {row['Pick Diff']:.2f}%
+## Pick: {pick}
 
----
+**Grade:** {row['Grade']}
 
-### Why This Is a Play
+### Model Edge
 
-Your model is showing that **{pick}** has enough value to qualify based on your rules:
+- Pick EV: **{row['Pick EV']:.2f}**
+- Pick Diff: **{row['Pick Diff']:.2f}%**
+- Sharp Dog: **{sharp if sharp else "None"}**
 
-- EV greater than {EV_THRESHOLD}
-- Difference greater than or equal to {DIFF_THRESHOLD}
+### Matchup Data
 
----
+**{row['Away Team']}**
+- Odds: {row['Away Odds']}
+- Win %: {row['Away Win %']}
+- Diff: {row['Away Diff']}
+- EV: {row['Away EV']}
 
-### Market Read
+**{row['Home Team']}**
+- Odds: {row['Home Odds']}
+- Win %: {row['Home Win %']}
+- Diff: {row['Home Diff']}
+- EV: {row['Home EV']}
 
-{market_read}
-
----
-
-### Sharp Confirmation
+### Sharp / Market Read
 
 {sharp_read}
 
----
+### Final Read
 
-### Full Breakdown
-
-**{row['Away Team']}**
-
-- Vegas: {row['Vegas Away']}
-- My Win %: {row['My Win Away']}
-- Diff: {row['Diff Away']}
-- EV: {row['EV Away']:.2f}%
-
-**{row['Home Team']}**
-
-- Vegas: {row['Vegas Home']}
-- My Win %: {row['My Win Home']}
-- Diff: {row['Diff Home']}
-- EV: {row['EV Home']:.2f}%
-
----
-
-### Interpretation
-
-This is a valid model play because the qualifying side is the same side carrying the positive EV and positive edge.
+This qualifies because the model side has positive EV and a meaningful difference over the market. If sharp money agrees, confidence improves. If sharp money conflicts, treat it with caution.
 """
 
-
-def write_signal_card(row):
-    return f"""
-### 🎯 SIGNAL PLAY — {row['Matchup']}
-
-**Play Side:** {row['Model Pick']}  
-**Sharp Side:** {row['Sharp Dog']}  
-**EV:** {row['Pick EV']:.2f}%  
-**Diff:** {row['Pick Diff']:.2f}%
-
----
-
-### Why This Is a Signal
-
-This qualifies because all three are pointing to the same team:
-
-- Model Pick
-- Sharp Dog
-- Positive EV / positive Diff
-
-This is your cleanest type of setup.
-"""
-
-
-def write_sharp_card(row):
-    sharp_team = row["Sharp Dog"]
-    pick = row["Model Pick"]
-
-    sharp_norm = normalize_team(sharp_team)
-    pick_norm = normalize_team(pick)
-
-    aligned = sharp_norm and pick_norm and sharp_norm == pick_norm
-
-    if aligned:
-        read = "Sharps and model are aligned."
-    else:
-        read = "Sharps and model are not aligned."
-
-    return f"""
-### 🔥 Sharp Money — {row['Matchup']}
-
-**Sharp Side:** {sharp_team if sharp_team else "NONE"}  
-**Model Pick:** {pick}  
-**Read:** {read}
-
----
-
-### Sharp ML
-
-- {row['Away Team']}: {row['Sharp ML Away']}
-- {row['Home Team']}: {row['Sharp ML Home']}
-
----
-
-### Betting Interpretation
-
-If sharp side and model pick align, confidence improves.  
-If they conflict, this is a caution game, not a signal.
-"""
-
-
-# ============================================================
-# LOAD SHEET
-# ============================================================
-
-st.title("⚾ 2026 MLB Tactical Command Center")
 
 df = load_data()
 
-if df.empty:
-    st.info("🔄 Syncing...")
+required_cols = [
+    "Away Team", "Home Team",
+    "Away Odds", "Home Odds",
+    "Away Win %", "Home Win %",
+    "Away Diff", "Home Diff",
+    "Away EV", "Home EV",
+    "Sharp Away", "Sharp Home", "Sharp Dog"
+]
+
+missing = [c for c in required_cols if c not in df.columns]
+
+if missing:
+    st.error(f"Missing columns in APP_EXPORT: {missing}")
+    st.write("Detected columns:", list(df.columns))
     st.stop()
 
+df = df[df["Away Team"].astype(str).str.strip() != ""].copy()
 
-try:
-    main_df = df[
-        df.iloc[:, 0].astype(str).str.len() > 2
-    ].copy().reset_index(drop=True)
+picks = df.apply(get_pick, axis=1)
 
-    away_team = safe_get(main_df, "Away Team", 0)
-    home_team = safe_get(main_df, "Home Team", 1)
+df["Model Pick"] = [p[0] for p in picks]
+df["Pick Side"] = [p[1] for p in picks]
+df["Pick EV"] = [p[2] for p in picks]
+df["Pick Diff"] = [p[3] for p in picks]
+df["Grade"] = df.apply(lambda r: grade(r["Pick EV"], r["Pick Diff"]), axis=1)
 
-    vegas_away = safe_get(main_df, "Vegas Away", 4)
-    vegas_home = safe_get(main_df, "Vegas Home", 5)
-
-    sharp_ml_away = safe_get(main_df, "Sharp ML Away", 13)
-    sharp_ml_home = safe_get(main_df, "Sharp ML Home", 14)
-    sharp_dog = safe_get(main_df, "Sharp Dog", 15)
-
-    win_away = safe_get(main_df, "My Win Away", 18)
-    win_home = safe_get(main_df, "My Win Home", 19)
-
-    diff_away = safe_get(main_df, "Diff Away", 20)
-    diff_home = safe_get(main_df, "Diff Home", 21)
-
-    ev_away = pd.to_numeric(safe_get(main_df, "EV Away", 22), errors="coerce")
-    ev_home = pd.to_numeric(safe_get(main_df, "EV Home", 23), errors="coerce")
-
-    master_table = pd.DataFrame({
-        "Matchup": away_team + " @ " + home_team,
-        "Away Team": away_team,
-        "Home Team": home_team,
-        "Vegas Away": vegas_away,
-        "Vegas Home": vegas_home,
-        "Sharp ML Away": sharp_ml_away,
-        "Sharp ML Home": sharp_ml_home,
-        "Sharp Dog": sharp_dog,
-        "My Win Away": win_away,
-        "My Win Home": win_home,
-        "Diff Away": diff_away,
-        "Diff Home": diff_home,
-        "EV Away": ev_away,
-        "EV Home": ev_home,
-    })
-
-    picks = master_table.apply(calculate_model_pick, axis=1)
-
-    master_table["Model Pick"] = [p[0] for p in picks]
-    master_table["Pick Side"] = [p[1] for p in picks]
-    master_table["Pick EV"] = [p[2] for p in picks]
-    master_table["Pick Diff"] = [p[3] for p in picks]
-
-    high_ev_mask = master_table["Model Pick"] != "PASS"
-
-    sharp_mask = (
-        master_table["Sharp Dog"]
-        .astype(str)
-        .str.strip()
-        .str.len() > 1
-    )
-
-    signal_mask = master_table.apply(
-        lambda row: (
-            row["Model Pick"] != "PASS"
-            and normalize_team(row["Model Pick"]) == normalize_team(row["Sharp Dog"])
-            and row["Pick EV"] > HIGH_EV_THRESHOLD
-            and row["Pick Diff"] >= DIFF_THRESHOLD
-        ),
+model_plays = df[df["Model Pick"] != "PASS"].copy()
+top_plays = model_plays.sort_values(by="Pick EV", ascending=False).head(5)
+dogs = model_plays[
+    model_plays.apply(
+        lambda r: to_num(r["Away Odds"]) > 0 if r["Pick Side"] == "Away" else to_num(r["Home Odds"]) > 0,
         axis=1
     )
+].sort_values(by="Pick EV", ascending=False)
 
-    # ========================================================
-    # METRICS
-    # ========================================================
+signals = model_plays[
+    model_plays.apply(lambda r: normalize(r["Model Pick"]) == normalize(r["Sharp Dog"]), axis=1)
+].sort_values(by="Pick EV", ascending=False)
 
-    c1, c2, c3, c4 = st.columns(4)
+st.title("⚾ MLB Command Center")
+st.caption("Reading directly from APP_EXPORT")
 
-    c1.metric("Games", len(master_table))
-    c2.metric("Sharp Targets", int(sharp_mask.sum()))
-    c3.metric("Model Plays", int(high_ev_mask.sum()))
-    c4.metric("Signal Plays", int(signal_mask.sum()))
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "All Games",
+    "Top 5 Plays",
+    "Underdogs",
+    "Signal Plays",
+    "Writeups"
+])
 
-    # ========================================================
-    # TABS
-    # ========================================================
+with tab1:
+    st.subheader("All Games")
+    st.dataframe(df, use_container_width=True, hide_index=True)
 
-    board_tab, sharp_tab, ev_tab, signal_tab = st.tabs([
-        "📋 Tactical Board",
-        "🔥 Sharp Money",
-        "📈 Model Plays",
-        "🎯 Signal Plays"
-    ])
+with tab2:
+    st.subheader("Top 5 Model Plays")
+    st.dataframe(top_plays, use_container_width=True, hide_index=True)
 
-    # ========================================================
-    # BOARD TAB
-    # ========================================================
+with tab3:
+    st.subheader("Underdog Plays")
+    if dogs.empty:
+        st.info("No underdog plays found.")
+    else:
+        st.dataframe(dogs, use_container_width=True, hide_index=True)
 
-    with board_tab:
-        st.subheader("📋 Full Tactical Board")
+with tab4:
+    st.subheader("Signal Plays")
+    if signals.empty:
+        st.info("No sharp/model alignment plays found.")
+    else:
+        st.dataframe(signals, use_container_width=True, hide_index=True)
 
-        board_view = master_table[[
-            "Matchup",
-            "Vegas Away",
-            "Vegas Home",
-            "Sharp ML Away",
-            "Sharp ML Home",
-            "Sharp Dog",
-            "My Win Away",
-            "My Win Home",
-            "Diff Away",
-            "Diff Home",
-            "EV Away",
-            "EV Home",
-            "Model Pick",
-            "Pick EV",
-            "Pick Diff"
-        ]]
-
-        def style_tactical_board(row):
-            styles = [''] * len(row)
-
-            col_map = {name: idx for idx, name in enumerate(row.index)}
-
-            if row["Model Pick"] != "PASS":
-                styles[col_map["Model Pick"]] = (
-                    "background-color:#c6efce;color:#006100;font-weight:bold;"
-                )
-
-            if row["Sharp Dog"]:
-                styles[col_map["Sharp Dog"]] = (
-                    "background-color:#d1e7ff;color:#004085;font-weight:bold;"
-                )
-
-            for col in ["EV Away", "EV Home", "Pick EV"]:
-                val = to_n(row[col])
-                if val is not None and val > 10:
-                    styles[col_map[col]] = (
-                        "background-color:#fff3cd;color:#856404;font-weight:bold;"
-                    )
-
-            if (
-                row["Model Pick"] != "PASS"
-                and normalize_team(row["Model Pick"]) == normalize_team(row["Sharp Dog"])
-                and row["Pick EV"] > HIGH_EV_THRESHOLD
-            ):
-                styles = [
-                    "background-color:#d4edda;color:#155724;font-weight:bold;"
-                ] * len(row)
-
-            return styles
-
-        st.dataframe(
-            board_view.style.apply(style_tactical_board, axis=1),
-            use_container_width=True,
-            hide_index=True,
-            height=700
-        )
-
-    # ========================================================
-    # SHARP TAB
-    # ========================================================
-
-    with sharp_tab:
-        st.subheader("🔥 Sharp Money Targets")
-
-        sharp_rows = master_table[sharp_mask]
-
-        if sharp_rows.empty:
-            st.warning("No sharp money targets found.")
-
-        for _, row in sharp_rows.iterrows():
-            if normalize_team(row["Sharp Dog"]) == normalize_team(row["Model Pick"]):
-                st.success(write_sharp_card(row))
-            else:
-                st.warning(write_sharp_card(row))
-
-    # ========================================================
-    # MODEL PLAY TAB
-    # ========================================================
-
-    with ev_tab:
-        st.subheader("📈 Model Plays")
-
-        model_rows = master_table[high_ev_mask].sort_values(
-            by="Pick EV",
-            ascending=False
-        )
-
-        if model_rows.empty:
-            st.warning("No model plays found.")
-
-        for _, row in model_rows.iterrows():
-            st.info(write_ev_card(row))
-
-    # ========================================================
-    # SIGNAL TAB
-    # ========================================================
-
-    with signal_tab:
-        st.subheader("🎯 Signal Plays")
-
-        signal_rows = master_table[signal_mask].sort_values(
-            by="Pick EV",
-            ascending=False
-        )
-
-        if signal_rows.empty:
-            st.warning("No signal plays found.")
-
-        for _, row in signal_rows.iterrows():
-            st.success(write_signal_card(row))
-
-except Exception as e:
-    st.error(f"Logic Error: {e}")
+with tab5:
+    st.subheader("Writeups")
+    if model_plays.empty:
+        st.info("No model plays to write up.")
+    else:
+        for _, row in model_plays.sort_values(by="Pick EV", ascending=False).iterrows():
+            st.markdown(writeup(row))
+            st.divider()
