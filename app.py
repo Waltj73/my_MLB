@@ -219,7 +219,7 @@ for _, row in results_df.iterrows():
 
 
 
----
+
 
 # What This Adds To Your App
 
@@ -232,7 +232,7 @@ This version automatically generates:
 * PASS filters
 * Auto write-ups for every game
 
----
+
 
 # What You Need To Replace
 
@@ -250,13 +250,13 @@ results_df = YOUR_REAL_MODEL_DF
 
 using your real Google Sheet or calculation engine.
 
----
+
 
 # Required Column Names
 
 Your dataframe must contain:
 
-```python
+
 Away Team
 Home Team
 Away Odds
@@ -273,7 +273,7 @@ Sharp Away
 Sharp Home
 
 
----
+
 
 # Future Upgrades
 
