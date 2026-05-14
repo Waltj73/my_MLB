@@ -21,12 +21,9 @@ def clean_text(x):
 def to_float(x):
     if pd.isna(x):
         return np.nan
-
     s = str(x).replace("%", "").replace("$", "").replace(",", "").replace("+", "").strip()
-
-    if s == "" or s.upper() in ["#N/A", "#VALUE!", "NAN"]:
+    if s == "" or s.upper() in ["#N/A", "#VALUE!", "NAN", "NONE"]:
         return np.nan
-
     try:
         return float(s)
     except Exception:
@@ -34,14 +31,14 @@ def to_float(x):
 
 
 def to_odds(x):
-    val = to_float(x)
-    if pd.isna(val):
+    v = to_float(x)
+    if pd.isna(v):
         return np.nan
-    return int(val)
+    return int(v)
 
 
 def is_dog(odds):
-    return not pd.isna(odds) and odds > 0
+    return not pd.isna(odds) and float(odds) > 0
 
 
 @st.cache_data(ttl=300)
@@ -52,80 +49,162 @@ def load_sheet():
 raw = load_sheet()
 
 
-def parse_games(raw_df):
+def find_header_row(df):
+    for i in range(len(df)):
+        row_vals = [clean_text(x) for x in df.iloc[i].tolist()]
+        if "Away Team" in row_vals and "Home Team" in row_vals:
+            return i
+    return None
+
+
+def build_model_table(raw_df):
+    header_row = find_header_row(raw_df)
+
+    if header_row is None:
+        st.error("Could not find the header row with Away Team / Home Team.")
+        st.stop()
+
+    group_row = header_row - 1 if header_row > 0 else header_row
+    groups = raw_df.iloc[group_row].fillna("").tolist()
+    subs = raw_df.iloc[header_row].fillna("").tolist()
+
+    final_cols = []
+    current_group = ""
+
+    for g, s in zip(groups, subs):
+        g = clean_text(g)
+        s = clean_text(s)
+
+        if g != "":
+            current_group = g
+
+        if current_group != "" and s != "":
+            final_cols.append(f"{current_group} {s}".strip())
+        elif s != "":
+            final_cols.append(s)
+        else:
+            final_cols.append(f"Blank_{len(final_cols)}")
+
+    data = raw_df.iloc[header_row + 1:].copy()
+    data.columns = final_cols
+    data = data.dropna(how="all")
+
+    return data
+
+
+sheet_df = build_model_table(raw)
+
+
+def find_col(df, possible_names):
+    cols = list(df.columns)
+
+    for name in possible_names:
+        for col in cols:
+            if col.lower().strip() == name.lower().strip():
+                return col
+
+    for name in possible_names:
+        for col in cols:
+            if name.lower().strip() in col.lower().strip():
+                return col
+
+    return None
+
+
+COLS = {
+    "away_team": find_col(sheet_df, ["Teams Away Team", "Away Team"]),
+    "home_team": find_col(sheet_df, ["Teams Home Team", "Home Team"]),
+
+    "away_runs": find_col(sheet_df, ["Projected Runs Away", "Away Runs", "Away Proj Score"]),
+    "home_runs": find_col(sheet_df, ["Projected Runs Home", "Home Runs", "Home Proj Score"]),
+
+    "away_odds": find_col(sheet_df, ["Vegas Odds Away"]),
+    "home_odds": find_col(sheet_df, ["Vegas Odds Home"]),
+
+    "away_my_odds": find_col(sheet_df, ["My Odds Away"]),
+    "home_my_odds": find_col(sheet_df, ["My Odds Home"]),
+
+    "sharp_away": find_col(sheet_df, ["Sharps ML Away", "Sharp ML Away"]),
+    "sharp_home": find_col(sheet_df, ["Sharps ML Home", "Sharp ML Home"]),
+    "sharp_dog": find_col(sheet_df, ["Sharp Dogs", "Sharp Dog"]),
+
+    "away_vegas_win": find_col(sheet_df, ["Vegas Win% Away", "Vegas Win % Away"]),
+    "home_vegas_win": find_col(sheet_df, ["Vegas Win% Home", "Vegas Win % Home"]),
+
+    "away_my_win": find_col(sheet_df, ["My Win% Away", "My Win % Away"]),
+    "home_my_win": find_col(sheet_df, ["My Win% Home", "My Win % Home"]),
+
+    "away_diff": find_col(sheet_df, ["Differences Away"]),
+    "home_diff": find_col(sheet_df, ["Differences Home"]),
+
+    "away_ev": find_col(sheet_df, ["EV Away", "My Expected Value Away"]),
+    "home_ev": find_col(sheet_df, ["EV Home", "My Expected Value Home"]),
+}
+
+
+def require_cols():
+    missing = [k for k, v in COLS.items() if v is None and k not in ["sharp_away", "sharp_home", "sharp_dog"]]
+    if missing:
+        st.error(f"Missing required columns: {missing}")
+        st.write("Detected columns:")
+        st.write(list(sheet_df.columns))
+        st.stop()
+
+
+require_cols()
+
+
+def parse_games(df):
     games = []
 
-    for i in range(len(raw_df)):
-        row = raw_df.iloc[i]
+    for _, row in df.iterrows():
+        away_team = clean_text(row[COLS["away_team"]])
+        home_team = clean_text(row[COLS["home_team"]])
 
-        away_team = clean_text(row.iloc[0])
-        home_team = clean_text(row.iloc[1])
-
-        if away_team in ["", "Away Team", "Teams"]:
+        if away_team == "" or home_team == "":
             continue
 
-        if home_team in ["", "Home Team"]:
+        if away_team.lower() in ["away team", "teams"] or home_team.lower() in ["home team"]:
             continue
-
-        away_runs = to_float(row.iloc[2])
-        home_runs = to_float(row.iloc[3])
-
-        away_odds = to_odds(row.iloc[4])
-        home_odds = to_odds(row.iloc[5])
-
-        away_my_odds = to_odds(row.iloc[6])
-        home_my_odds = to_odds(row.iloc[7])
-
-        sharp_away = to_float(row.iloc[13])
-        sharp_home = to_float(row.iloc[14])
-        sharp_dog = clean_text(row.iloc[15])
-
-        away_vegas_win = to_float(row.iloc[16])
-        home_vegas_win = to_float(row.iloc[17])
-
-        away_my_win = to_float(row.iloc[18])
-        home_my_win = to_float(row.iloc[19])
-
-        away_diff = to_float(row.iloc[20])
-        home_diff = to_float(row.iloc[21])
-
-        away_ev = to_float(row.iloc[22])
-        home_ev = to_float(row.iloc[23])
 
         games.append({
             "Away Team": away_team,
             "Home Team": home_team,
 
-            "Away Runs": away_runs,
-            "Home Runs": home_runs,
+            "Away Runs": to_float(row[COLS["away_runs"]]),
+            "Home Runs": to_float(row[COLS["home_runs"]]),
 
-            "Away Odds": away_odds,
-            "Home Odds": home_odds,
+            "Away Odds": to_odds(row[COLS["away_odds"]]),
+            "Home Odds": to_odds(row[COLS["home_odds"]]),
 
-            "Away My Odds": away_my_odds,
-            "Home My Odds": home_my_odds,
+            "Away My Odds": to_odds(row[COLS["away_my_odds"]]),
+            "Home My Odds": to_odds(row[COLS["home_my_odds"]]),
 
-            "Sharp Away": sharp_away,
-            "Sharp Home": sharp_home,
-            "Sharp Dog": sharp_dog,
+            "Sharp Away": to_float(row[COLS["sharp_away"]]) if COLS["sharp_away"] else 0,
+            "Sharp Home": to_float(row[COLS["sharp_home"]]) if COLS["sharp_home"] else 0,
+            "Sharp Dog": clean_text(row[COLS["sharp_dog"]]) if COLS["sharp_dog"] else "",
 
-            "Away Vegas Win %": away_vegas_win,
-            "Home Vegas Win %": home_vegas_win,
+            "Away Vegas Win %": to_float(row[COLS["away_vegas_win"]]),
+            "Home Vegas Win %": to_float(row[COLS["home_vegas_win"]]),
 
-            "Away My Win %": away_my_win,
-            "Home My Win %": home_my_win,
+            "Away My Win %": to_float(row[COLS["away_my_win"]]),
+            "Home My Win %": to_float(row[COLS["home_my_win"]]),
 
-            "Away Diff": away_diff,
-            "Home Diff": home_diff,
+            "Away Diff": to_float(row[COLS["away_diff"]]),
+            "Home Diff": to_float(row[COLS["home_diff"]]),
 
-            "Away EV": away_ev,
-            "Home EV": home_ev,
+            "Away EV": to_float(row[COLS["away_ev"]]),
+            "Home EV": to_float(row[COLS["home_ev"]]),
         })
 
     return pd.DataFrame(games)
 
 
-results_df = parse_games(raw)
+results_df = parse_games(sheet_df)
+
+if results_df.empty:
+    st.error("No games found after parsing the sheet.")
+    st.stop()
 
 
 def get_pick_info(row):
@@ -167,8 +246,8 @@ def get_pick_info(row):
         "Pick": "PASS",
         "Pick Side": "Pass",
         "Pick Odds": np.nan,
-        "Pick EV": max(row["Away EV"], row["Home EV"]),
-        "Pick Diff": max(row["Away Diff"], row["Home Diff"]),
+        "Pick EV": max(away_ev, home_ev),
+        "Pick Diff": max(away_diff, home_diff),
         "Pick Win %": np.nan,
         "Pick Vegas Win %": np.nan,
         "Pick Sharp": 0,
@@ -186,17 +265,9 @@ def grade_play(ev, diff):
     return "Pass"
 
 
-if results_df.empty:
-    st.error("No games found. Check your Google Sheet layout.")
-    st.stop()
-
 pick_info = results_df.apply(get_pick_info, axis=1)
 results_df = pd.concat([results_df, pick_info], axis=1)
-
-results_df["Pick Grade"] = results_df.apply(
-    lambda r: grade_play(r["Pick EV"], r["Pick Diff"]),
-    axis=1
-)
+results_df["Pick Grade"] = results_df.apply(lambda r: grade_play(r["Pick EV"], r["Pick Diff"]), axis=1)
 
 
 def cell_style(col, val):
@@ -249,8 +320,6 @@ def fmt_value(col, val):
 
 
 def render_colored_table(df):
-    cols = list(df.columns)
-
     table = """
     <style>
     table.mlb-table {
@@ -279,14 +348,14 @@ def render_colored_table(df):
     <thead><tr>
     """
 
-    for col in cols:
+    for col in df.columns:
         table += f"<th>{html.escape(str(col))}</th>"
 
     table += "</tr></thead><tbody>"
 
     for _, row in df.iterrows():
         table += "<tr>"
-        for col in cols:
+        for col in df.columns:
             val = row[col]
             style = cell_style(col, val)
             text = fmt_value(col, val)
@@ -294,7 +363,6 @@ def render_colored_table(df):
         table += "</tr>"
 
     table += "</tbody></table></div>"
-
     st.markdown(table, unsafe_allow_html=True)
 
 
@@ -305,15 +373,15 @@ def sharp_comment(team, sharp_value):
         sharp_value = 0
 
     if sharp_value >= 20:
-        return f"Strong sharp support is showing on {team}. That strengthens the case because respected money appears to agree with the model."
+        return f"Strong sharp support is showing on {team}."
     if sharp_value >= 10:
-        return f"Moderate sharp support is showing on {team}. That gives the play some market confirmation."
+        return f"Moderate sharp support is showing on {team}."
     if sharp_value <= -20:
-        return f"There is heavy sharp resistance against {team}. The model may still like the play, but this is a warning sign."
+        return f"There is heavy sharp resistance against {team}."
     if sharp_value <= -10:
-        return f"There is some sharp resistance against {team}. This does not automatically kill the play, but it lowers confidence."
+        return f"There is some sharp resistance against {team}."
 
-    return "No major sharp signal detected. This is mostly a pure model edge."
+    return "No major sharp signal detected."
 
 
 def generate_writeup(row):
@@ -324,23 +392,19 @@ def generate_writeup(row):
 **PASS**
 
 This game does not meet the current EV and difference thresholds.
-
-The model is not showing enough clean separation between market price and projected probability to force a bet.
 """
 
     team = row["Pick"]
     opponent = row["Home Team"] if row["Pick Side"] == "Away" else row["Away Team"]
 
     dog_note = (
-        "This is an underdog value play. The market is pricing this team lower than your model does."
+        "This is an underdog value play."
         if row["Dog Pick"]
-        else "This is a favorite play with model support. The key is that the price still appears playable."
+        else "This is a favorite play with model support."
     )
 
-    sharp_text = sharp_comment(team, row["Pick Sharp"])
-
     if row["Sharp Dog"] == team:
-        sharp_dog_note = f"The sharp dog column also points toward {team}, which adds another layer of confirmation."
+        sharp_dog_note = f"The sharp dog column also points toward {team}, which adds confirmation."
     elif row["Sharp Dog"] != "":
         sharp_dog_note = f"The sharp dog column points toward {row['Sharp Dog']}, so this game has some market tension."
     else:
@@ -372,7 +436,7 @@ Against {opponent}, this qualifies because both the EV and difference thresholds
 
 ### Sharp Money
 
-{sharp_text}
+{sharp_comment(team, row['Pick Sharp'])}
 
 {sharp_dog_note}
 
@@ -386,7 +450,7 @@ Against {opponent}, this qualifies because both the EV and difference thresholds
 
 
 st.title("⚾ my_MLB Betting Dashboard")
-st.caption("Data pulled directly from your Google Sheet.")
+st.caption("Pulled directly from Google Sheets. No upload needed.")
 
 main_tab, top_tab, dogs_tab, writeups_tab, dog_writeups_tab = st.tabs([
     "All Games",
