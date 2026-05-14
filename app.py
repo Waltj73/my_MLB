@@ -1,48 +1,190 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
+import re
 import html
+import numpy as np
+import pandas as pd
+import streamlit as st
 
 st.set_page_config(page_title="my_MLB Betting Dashboard", layout="wide")
 
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0/export?format=csv&gid=1240994733"
+
 EV_MIN = 5
 EDGE_MIN = 5
-STRONG_EV = 20
-STRONG_EDGE = 10
 TOP_PICK_LIMIT = 5
 
-data = {
-    "Away Team": [
-        "Washington", "Colorado", "St. Louis", "NY Mets", "Pittsburgh",
-        "Atlanta", "Sacramento", "Tampa Bay", "LA Angels", "Minnesota",
-        "Seattle", "Detroit", "Houston", "Chi Cubs", "NY Yankees"
-    ],
-    "Home Team": [
-        "Miami", "Philadelphia", "San Diego", "Arizona", "SF Giants",
-        "LA Dodgers", "Baltimore", "Boston", "Toronto", "Cleveland",
-        "Chi Sox", "Kansas City", "Cincinnati", "Texas", "Milwaukee"
-    ],
-    "Away Odds": [135, 153, 123, -120, -122, 144, 109, 123, 149, 100, -136, 119, 135, -143, -143],
-    "Home Odds": [-163, -186, -149, 100, 102, -175, -131, -149, -181, -120, 113, -143, -163, 119, 119],
-    "Sharp Away": [44, 2, 0, 26, 2, 13, 12, 0, 0, -28, -8, 0, 0, 2, 3],
-    "Sharp Home": [-44, -2, 0, -26, -2, -13, -12, 0, 0, 28, 8, 0, 0, -2, -3],
-    "Away Vegas Win %": [42.55, 39.53, 44.84, 54.55, 54.95, 40.98, 47.85, 44.84, 40.16, 50.00, 57.63, 45.66, 42.55, 58.85, 58.85],
-    "Home Vegas Win %": [61.98, 65.03, 59.84, 50.00, 49.50, 63.64, 56.71, 59.84, 64.41, 54.55, 46.95, 58.85, 61.98, 45.66, 45.66],
-    "Away My Win %": [25.28, 14.21, 26.13, 46.85, 43.27, 18.98, 45.38, 53.19, 19.30, 40.51, 74.17, 36.71, 37.77, 63.29, 64.54],
-    "Home My Win %": [74.72, 85.79, 73.87, 53.15, 56.73, 81.02, 54.62, 46.81, 80.70, 59.49, 25.83, 63.29, 62.23, 36.71, 35.46],
-    "Away Diff": [-17.27, -25.31, -18.72, -7.69, -11.69, -22.01, -2.47, 8.35, -20.86, -9.49, 16.54, -8.95, -4.78, 4.44, 5.69],
-    "Home Diff": [12.74, 20.75, 14.03, 3.15, 7.23, 17.39, -2.09, -13.03, 16.28, 4.94, -21.12, 4.44, 0.25, -8.95, -10.20],
-    "Away EV": [-40.59, -64.04, -41.74, -14.10, -21.27, -53.69, -5.16, 18.61, -51.93, -18.97, 28.70, -19.60, -11.24, 7.54, 9.68],
-    "Home EV": [20.56, 31.91, 23.45, 6.29, 14.60, 27.32, -3.68, -21.77, 25.28, 9.06, -44.98, 7.54, 0.41, -19.60, -22.35],
-}
 
-results_df = pd.DataFrame(data)
+# =====================================================
+# HELPERS
+# =====================================================
+
+def clean_text(x):
+    if pd.isna(x):
+        return ""
+    return str(x).strip()
+
+
+def to_float(x):
+    if pd.isna(x):
+        return np.nan
+
+    s = str(x)
+    s = s.replace("%", "")
+    s = s.replace("$", "")
+    s = s.replace(",", "")
+    s = s.replace("+", "")
+    s = s.strip()
+
+    if s == "" or s.upper() in ["#N/A", "#VALUE!"]:
+        return np.nan
+
+    try:
+        return float(s)
+    except Exception:
+        return np.nan
+
+
+def to_odds(x):
+    s = clean_text(x)
+    s = s.replace("+", "")
+    try:
+        return int(float(s))
+    except Exception:
+        return np.nan
+
+
+def implied_prob(odds):
+    if pd.isna(odds):
+        return np.nan
+
+    odds = float(odds)
+
+    if odds < 0:
+        return abs(odds) / (abs(odds) + 100) * 100
+
+    return 100 / (odds + 100) * 100
+
+
+def expected_value(win_pct, odds):
+    if pd.isna(win_pct) or pd.isna(odds):
+        return np.nan
+
+    p = win_pct / 100
+    odds = float(odds)
+
+    if odds > 0:
+        return (p * odds) - ((1 - p) * 100)
+
+    return (p * 100) - ((1 - p) * abs(odds))
+
+
+def grade_play(ev, diff):
+    if ev >= 20 and diff >= 10:
+        return "Strong Play"
+    if ev >= 10 and diff >= 5:
+        return "Playable"
+    if ev > 5:
+        return "Lean"
+    return "Pass"
+
+
+def is_dog(odds):
+    return not pd.isna(odds) and odds > 0
+
+
+# =====================================================
+# LOAD GOOGLE SHEET
+# =====================================================
+
+@st.cache_data(ttl=300)
+def load_sheet():
+    return pd.read_csv(SHEET_URL, header=None, dtype=str)
+
+
+raw = load_sheet()
+
+
+# =====================================================
+# PARSE GAME ROWS
+# =====================================================
+
+def parse_games(raw_df):
+    games = []
+
+    for i in range(len(raw_df) - 1):
+        row = raw_df.iloc[i]
+        next_row = raw_df.iloc[i + 1]
+
+        if clean_text(row.iloc[0]).lower() == "away" and clean_text(next_row.iloc[0]).lower() == "home":
+
+            away_team = clean_text(row.iloc[1])
+            away_nick = clean_text(row.iloc[2])
+            home_team = clean_text(next_row.iloc[1])
+            home_nick = clean_text(next_row.iloc[2])
+
+            if away_team == "" or home_team == "":
+                continue
+
+            away_odds = to_odds(row.iloc[4])
+            home_odds = to_odds(next_row.iloc[4])
+
+            away_runs = to_float(row.iloc[11])
+            home_runs = to_float(next_row.iloc[11])
+
+            away_win = to_float(row.iloc[15])
+            home_win = to_float(next_row.iloc[15])
+
+            away_vegas = implied_prob(away_odds)
+            home_vegas = implied_prob(home_odds)
+
+            away_diff = away_win - away_vegas if not pd.isna(away_win) and not pd.isna(away_vegas) else np.nan
+            home_diff = home_win - home_vegas if not pd.isna(home_win) and not pd.isna(home_vegas) else np.nan
+
+            away_ev = expected_value(away_win, away_odds)
+            home_ev = expected_value(home_win, home_odds)
+
+            games.append({
+                "Away Team": away_team,
+                "Home Team": home_team,
+                "Away Full": f"{away_team} {away_nick}".strip(),
+                "Home Full": f"{home_team} {home_nick}".strip(),
+
+                "Away Odds": away_odds,
+                "Home Odds": home_odds,
+
+                "Away Runs": away_runs,
+                "Home Runs": home_runs,
+
+                "Away Vegas Win %": away_vegas,
+                "Home Vegas Win %": home_vegas,
+
+                "Away My Win %": away_win,
+                "Home My Win %": home_win,
+
+                "Away Diff": away_diff,
+                "Home Diff": home_diff,
+
+                "Away EV": away_ev,
+                "Home EV": home_ev,
+
+                "Sharp Away": 0,
+                "Sharp Home": 0,
+            })
+
+    return pd.DataFrame(games)
+
+
+results_df = parse_games(raw)
+
+
+# =====================================================
+# PICK LOGIC
+# =====================================================
 
 def get_pick_info(row):
-    away_ev = float(row["Away EV"])
-    home_ev = float(row["Home EV"])
-    away_diff = float(row["Away Diff"])
-    home_diff = float(row["Home Diff"])
+    away_ev = row["Away EV"]
+    home_ev = row["Home EV"]
+    away_diff = row["Away Diff"]
+    home_diff = row["Home Diff"]
 
     away_play = away_ev > EV_MIN and away_diff >= EDGE_MIN
     home_play = home_ev > EV_MIN and home_diff >= EDGE_MIN
@@ -57,7 +199,7 @@ def get_pick_info(row):
             "Pick Win %": row["Away My Win %"],
             "Pick Vegas Win %": row["Away Vegas Win %"],
             "Pick Sharp": row["Sharp Away"],
-            "Dog Pick": row["Away Odds"] > 0,
+            "Dog Pick": is_dog(row["Away Odds"]),
         })
 
     if home_play and (home_ev > away_ev or not away_play):
@@ -70,15 +212,15 @@ def get_pick_info(row):
             "Pick Win %": row["Home My Win %"],
             "Pick Vegas Win %": row["Home Vegas Win %"],
             "Pick Sharp": row["Sharp Home"],
-            "Dog Pick": row["Home Odds"] > 0,
+            "Dog Pick": is_dog(row["Home Odds"]),
         })
 
     return pd.Series({
         "Pick": "PASS",
         "Pick Side": "Pass",
         "Pick Odds": np.nan,
-        "Pick EV": max(away_ev, home_ev),
-        "Pick Diff": max(away_diff, home_diff),
+        "Pick EV": max(row["Away EV"], row["Home EV"]),
+        "Pick Diff": max(row["Away Diff"], row["Home Diff"]),
         "Pick Win %": np.nan,
         "Pick Vegas Win %": np.nan,
         "Pick Sharp": 0,
@@ -86,36 +228,34 @@ def get_pick_info(row):
     })
 
 
-def grade_play(ev, diff):
-    if ev >= STRONG_EV and diff >= STRONG_EDGE:
-        return "Strong Play"
-    if ev >= 10 and diff >= EDGE_MIN:
-        return "Playable"
-    if ev > EV_MIN:
-        return "Lean"
-    return "Pass"
-
-
 pick_info = results_df.apply(get_pick_info, axis=1)
 results_df = pd.concat([results_df, pick_info], axis=1)
+
 results_df["Pick Grade"] = results_df.apply(
-    lambda row: grade_play(row["Pick EV"], row["Pick Diff"]), axis=1
+    lambda r: grade_play(r["Pick EV"], r["Pick Diff"]),
+    axis=1
 )
 
+
+# =====================================================
+# COLOR TABLE
+# =====================================================
+
 def cell_style(col, val):
-    if col in ["Away EV", "Home EV", "Pick EV", "Away Diff", "Home Diff", "Pick Diff"]:
-        try:
-            v = float(val)
-            if v >= 20:
-                return "background:#0f9d58;color:white;font-weight:bold;"
-            if v >= 10:
-                return "background:#b7e1cd;color:black;font-weight:bold;"
-            if v > 0:
-                return "background:#fff2cc;color:black;"
-            if v < 0:
-                return "background:#f4c7c3;color:black;"
-        except Exception:
-            return ""
+    try:
+        v = float(val)
+    except Exception:
+        v = None
+
+    if col in ["Away EV", "Home EV", "Pick EV", "Away Diff", "Home Diff", "Pick Diff"] and v is not None:
+        if v >= 20:
+            return "background:#0f9d58;color:white;font-weight:bold;"
+        if v >= 10:
+            return "background:#b7e1cd;color:black;font-weight:bold;"
+        if v > 0:
+            return "background:#fff2cc;color:black;"
+        if v < 0:
+            return "background:#f4c7c3;color:black;"
 
     if col == "Pick Grade":
         if val == "Strong Play":
@@ -124,19 +264,35 @@ def cell_style(col, val):
             return "background:#b7e1cd;color:black;font-weight:bold;"
         if val == "Lean":
             return "background:#fff2cc;color:black;"
-        if val == "Pass":
-            return "background:#eeeeee;color:#777;"
+        return "background:#eeeeee;color:#666;"
 
     if col == "Pick":
         if val != "PASS":
             return "background:#0f9d58;color:white;font-weight:bold;"
-        return "background:#eeeeee;color:#777;"
+        return "background:#eeeeee;color:#666;"
 
     return ""
 
 
+def fmt_value(col, val):
+    if pd.isna(val):
+        return ""
+
+    if isinstance(val, (float, int, np.integer, np.floating)):
+        if "%" in col or "Diff" in col:
+            return f"{val:.2f}%"
+        if "EV" in col:
+            return f"{val:.2f}"
+        if "Odds" in col:
+            return f"{int(val)}"
+        return f"{val:.2f}"
+
+    return str(val)
+
+
 def render_colored_table(df):
     cols = list(df.columns)
+
     table = """
     <style>
     table.mlb-table {
@@ -152,6 +308,7 @@ def render_colored_table(df):
         text-align: center;
         position: sticky;
         top: 0;
+        z-index: 2;
     }
     table.mlb-table td {
         padding: 6px;
@@ -159,12 +316,14 @@ def render_colored_table(df):
         text-align: center;
     }
     </style>
+    <div style="overflow-x:auto; max-height:700px;">
     <table class="mlb-table">
     <thead><tr>
     """
 
     for col in cols:
         table += f"<th>{html.escape(str(col))}</th>"
+
     table += "</tr></thead><tbody>"
 
     for _, row in df.iterrows():
@@ -172,40 +331,35 @@ def render_colored_table(df):
         for col in cols:
             val = row[col]
             style = cell_style(col, val)
-
-            if isinstance(val, float):
-                if "%" in col or "Diff" in col:
-                    text = f"{val:.2f}%"
-                elif "EV" in col:
-                    text = f"{val:.2f}"
-                elif "Odds" in col and not pd.isna(val):
-                    text = f"{int(val)}"
-                else:
-                    text = f"{val:.2f}"
-            elif pd.isna(val):
-                text = ""
-            else:
-                text = str(val)
-
+            text = fmt_value(col, val)
             table += f'<td style="{style}">{html.escape(text)}</td>'
         table += "</tr>"
 
-    table += "</tbody></table>"
+    table += "</tbody></table></div>"
+
     st.markdown(table, unsafe_allow_html=True)
 
 
+# =====================================================
+# WRITEUPS
+# =====================================================
+
 def sharp_comment(team, sharp_value):
-    sharp_value = float(sharp_value)
+    try:
+        sharp_value = float(sharp_value)
+    except Exception:
+        sharp_value = 0
 
     if sharp_value >= 20:
-        return f"Strong sharp support is showing on {team}. That strengthens the case and suggests respected money agrees with the model."
+        return f"Strong sharp support is showing on {team}."
     if sharp_value >= 10:
-        return f"Moderate sharp support is showing on {team}. That gives the play some market confirmation."
+        return f"Moderate sharp support is showing on {team}."
     if sharp_value <= -20:
-        return f"There is heavy sharp resistance against {team}. The model may still like the play, but this is a warning sign."
+        return f"There is heavy sharp resistance against {team}."
     if sharp_value <= -10:
-        return f"There is some sharp resistance against {team}. This does not kill the play, but it lowers confidence."
-    return "No major sharp signal detected. This is mostly a pure model edge rather than a sharp-backed play."
+        return f"There is some sharp resistance against {team}."
+
+    return "No major sharp signal detected."
 
 
 def generate_writeup(row):
@@ -215,85 +369,65 @@ def generate_writeup(row):
 
 **PASS**
 
-This game does not meet the current betting threshold.
+This game does not meet the current EV and edge thresholds.
 
-The model does not show enough clean separation between projected value, market price, and EV. This is the type of game where forcing action can create unnecessary risk.
+The model is not showing enough value to force a bet here.
 """
 
     team = row["Pick"]
     opponent = row["Home Team"] if row["Pick Side"] == "Away" else row["Away Team"]
 
-    odds = int(row["Pick Odds"])
-    ev = row["Pick EV"]
-    diff = row["Pick Diff"]
-    grade = row["Pick Grade"]
-    model_win = row["Pick Win %"]
-    vegas_win = row["Pick Vegas Win %"]
-    sharp = row["Pick Sharp"]
-
     dog_note = (
-        "This is an underdog value play. The market is pricing this team as less likely to win than your model suggests."
+        "This is an underdog value play. The market is pricing this team lower than your model does."
         if row["Dog Pick"]
-        else "This is a favorite play with model support. The key is not just that the team is favored, but that your model believes the current price is still short."
+        else "This is a favorite play with model support. The key is that the price still appears playable."
     )
-
-    if grade == "Strong Play":
-        confidence_text = "This is one of the stronger plays on the board because both EV and model edge are clearly above threshold."
-    elif grade == "Playable":
-        confidence_text = "This is a playable edge, but not quite the strongest tier. It is worth consideration, especially as a straight bet."
-    else:
-        confidence_text = "This is more of a lean than a core play. It should be sized smaller or used only if you are comfortable with the risk."
-
-    sharp_text = sharp_comment(team, sharp)
 
     return f"""
 ### {row['Away Team']} vs {row['Home Team']}
 
-## 🎯 Pick: {team} ML ({odds})
+## Pick: {team} ML ({int(row['Pick Odds'])})
 
-**Grade:** {grade}
+**Grade:** {row['Pick Grade']}
 
----
+### Model vs Market
 
-### 📊 Model vs Market
+- Vegas Win %: **{row['Pick Vegas Win %']:.2f}%**
+- Model Win %: **{row['Pick Win %']:.2f}%**
+- Difference: **{row['Pick Diff']:.2f}%**
+- Expected Value: **{row['Pick EV']:.2f}**
 
-- Vegas implied win probability: **{vegas_win:.2f}%**
-- Your model win probability: **{model_win:.2f}%**
-- Difference: **{diff:.2f}%**
-- Expected Value: **{ev:.2f}**
-
----
-
-### 🧠 Why This Is a Play
+### Read
 
 {dog_note}
 
-Your model is showing a meaningful gap between the market price and your projected probability. That gap is what creates the betting value here.
+Your model prices {team} better than the market does. The edge over Vegas is **{row['Pick Diff']:.2f}%**, with an EV of **{row['Pick EV']:.2f}**.
 
-Against {opponent}, the model is not just saying “{team} can win.” It is saying the current moneyline is not fully pricing in the probability your numbers assign to this matchup.
+Against {opponent}, this qualifies because both the EV and difference thresholds are met.
 
-{confidence_text}
+### Sharp Money
 
----
+{sharp_comment(team, row['Pick Sharp'])}
 
-### 💰 Sharp Money Read
+### Risk Notes
 
-{sharp_text}
-
-Sharp money should not override the model by itself, but it can help explain confidence. If sharp action agrees with the play, that strengthens it. If sharp action is against the play, the bet may still be valid, but it should be sized more carefully.
-
----
-
-### ⚠️ Risk Notes
-
-- MLB has high variance, even on strong edges.
-- Avoid stacking too many correlated moneyline favorites in one parlay.
-- If this is an underdog, expect more volatility.
-- If this is a heavy favorite, make sure the price is still worth paying.
+- MLB variance is high.
+- Avoid forcing every edge into a parlay.
+- Strong favorites can still be overpriced.
+- Underdogs carry more volatility.
 """
 
 
+# =====================================================
+# DISPLAY
+# =====================================================
+
 st.title("⚾ my_MLB Betting Dashboard")
+st.caption("Data is pulled directly from your Google Sheet tab.")
+
+if results_df.empty:
+    st.error("No games found. Check that your Google Sheet layout still has Away/Home rows.")
+    st.stop()
 
 main_tab, top_tab, dogs_tab, writeups_tab, dog_writeups_tab = st.tabs([
     "All Games",
@@ -314,7 +448,11 @@ with top_tab:
         .sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
         .head(TOP_PICK_LIMIT)
     )
-    render_colored_table(top_picks)
+
+    if top_picks.empty:
+        st.info("No picks met the current filters.")
+    else:
+        render_colored_table(top_picks)
 
 with dogs_tab:
     st.subheader("Top Underdog Picks")
@@ -322,6 +460,7 @@ with dogs_tab:
         results_df[(results_df["Pick"] != "PASS") & (results_df["Dog Pick"] == True)]
         .sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
     )
+
     if dog_picks.empty:
         st.info("No underdog picks met the current filters.")
     else:
@@ -333,6 +472,9 @@ with writeups_tab:
         results_df[results_df["Pick"] != "PASS"]
         .sort_values(by="Pick EV", ascending=False)
     )
+
+    if writeup_games.empty:
+        st.info("No writeups because no picks met the current filters.")
 
     for _, row in writeup_games.iterrows():
         st.markdown(generate_writeup(row))
