@@ -2,167 +2,153 @@ import pandas as pd
 import numpy as np
 import sys
 
-def calculate_american_odds_probability(odds_value):
-    """
-    Converts American betting odds (e.g., -150, +130) into an implied probability percentage.
-    """
+def parse_american_odds(odds_val):
+    """Converts American odds strings or numbers safely to a probability fraction."""
     try:
-        # Clean up input string/number
-        cleaned_odds = float(str(odds_value).replace('+', '').strip())
-        if cleaned_odds > 0:
-            return 100 / (cleaned_odds + 100)
+        val_str = str(odds_val).replace('+', '').strip()
+        # Handle cases where empty strings or placeholders slip through
+        if not val_str or any(x in val_str.lower() for x in ['vs', 'at', '@', 'nan', 'null']):
+            return 0.50
+        num = float(val_str)
+        if num > 0:
+            return 100 / (num + 100)
         else:
-            return abs(cleaned_odds) / (abs(cleaned_odds) + 100)
-    except Exception:
-        # Default fallback to 50% if the odds data is missing or unreadable
+            return abs(num) / (abs(num) + 100)
+    except:
         return 0.50
 
-def run_mlb_betting_model():
-    # Target Google Sheet Parameters
+def build_mlb_dashboard():
+    # Production sheet endpoints forced to CSV format
     sheet_id = "1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0"
     gid_id = "1240994733"
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid_id}"
     
-    # Correct URL structure to force a direct CSV download of the specific tab
-    csv_export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid_id}"
-    
-    print("🔄 Connecting to Google Sheet and downloading live matchups...")
-    
+    print("🔄 Establishing connection to Google Sheet Engine...")
     try:
-        # Download the live sheet data directly into a pandas DataFrame
-        df = pd.read_csv(csv_export_url)
+        # Load data cleanly without assuming header positions immediately
+        raw_df = pd.read_csv(url)
     except Exception as e:
-        print("\n❌ CRITICAL ERROR: Could not access or download the Google Sheet.")
-        print(f"Details: {e}")
-        print("\n💡 Fix: Make sure the Google Sheet is set to 'Anyone with the link can view' so the script can read it.")
+        print(f"❌ Connection failed: Unable to parse remote CSV link. ({e})")
         sys.exit(1)
         
-    # Standardize column headers: remove spaces, force lowercase
-    df.columns = df.columns.str.strip().str.lower()
+    # Standardize column labels to remove human formatting discrepancies
+    raw_df.columns = raw_df.columns.str.strip().str.lower()
     
-    # Define dynamic keyword groupings to find correct columns regardless of slight structural changes
-    potential_away_cols = ['away', 'away team', 'away_team', 'visitor', 'v']
-    potential_home_cols = ['home', 'home team', 'home_team', 'local', 'h']
-    potential_away_proj = ['away proj', 'away projected runs', 'away_projected', 'away_proj', 'away_proj_runs']
-    potential_home_proj = ['home proj', 'home projected runs', 'home_projected', 'home_proj', 'home_proj_runs']
-    potential_vegas_away = ['vegas away', 'away odds', 'away line', 'vegas_away', 'vegas_away_line']
-    potential_vegas_home = ['vegas home', 'home odds', 'home line', 'vegas_home', 'vegas_home_line']
+    # Precise signature identification for your specific model structure
+    col_map = {}
+    for col in raw_df.columns:
+        if 'away' in col or 'team 1' in col:
+            if 'proj' in col or 'run' in col: col_map['away_proj'] = col
+            elif 'line' in col or 'odds' in col or 'vegas' in col: col_map['away_odds'] = col
+            else: col_map['away_team'] = col
+        elif 'home' in col or 'team 2' in col:
+            if 'proj' in col or 'run' in col: col_map['home_proj'] = col
+            elif 'line' in col or 'odds' in col or 'vegas' in col: col_map['home_odds'] = col
+            else: col_map['home_team'] = col
 
-    # Assign columns based on matching keywords, falling back to positional index if matches aren't found
-    matched_cols = {}
-    matched_cols['away'] = next((c for c in df.columns if c in potential_away_cols), df.columns[0])
-    matched_cols['home'] = next((c for c in df.columns if c in potential_home_cols), df.columns[1])
-    matched_cols['away_proj'] = next((c for c in df.columns if c in potential_away_proj), df.columns[2])
-    matched_cols['home_proj'] = next((c for c in df.columns if c in potential_home_proj), df.columns[3])
-    matched_cols['vegas_away'] = next((c for c in df.columns if c in potential_vegas_away), df.columns[4])
-    matched_cols['vegas_home'] = next((c for c in df.columns if c in potential_vegas_home), df.columns[5])
+    # Bulletproof fallback using structural indices if exact string match fails
+    required_keys = ['away_team', 'home_team', 'away_proj', 'home_proj', 'away_odds', 'home_odds']
+    indices_fallback = [0, 1, 2, 3, 4, 5]
+    for key, idx in zip(required_keys, indices_fallback):
+        if key not in col_map and len(raw_df.columns) > idx:
+            col_map[key] = raw_df.columns[idx]
 
-    # Drop completely blank rows based on team name availability
-    df = df.dropna(subset=[matched_cols['away'], matched_cols['home']])
-    
-    processed_games = []
+    # Verify column layout viability before executing matrix math
+    if len(col_map) < 6:
+        print("❌ Data Layout Mismatch: Sheet formatting does not match standard 6-column projection structure.")
+        sys.exit(1)
 
-    # Iterate through every row of data in the spreadsheet
-    for index, row in df.iterrows():
-        away_team_raw = str(row[matched_cols['away']]).strip()
-        home_team_raw = str(row[matched_cols['home']]).strip()
+    games_list = []
+
+    # Parse structural contents line by line
+    for _, row in raw_df.iterrows():
+        a_team = str(row[col_map['away_team']]).strip()
+        h_team = str(row[col_map['home_team']]).strip()
         
-        # Skip header duplicates, empty rows, or summary metrics
-        if not away_team_raw or "team" in away_team_raw.lower() or away_team_raw == "":
+        # Skip labels, empty records, and visual summary rows
+        if not a_team or not h_team or 'team' in a_team.lower() or 'nan' in a_team.lower():
             continue
             
         try:
-            # Parse metrics to floats
-            away_projected_runs = float(row[matched_cols['away_proj']])
-            home_projected_runs = float(row[matched_cols['home_proj']])
-            vegas_away_odds = row[matched_cols['vegas_away']]
-            vegas_home_odds = row[matched_cols['vegas_home']]
-        except (ValueError, TypeError):
-            # Skip rows that don't have valid numerical projections or data filled out yet
+            a_proj = float(str(row[col_map['away_proj']]).strip())
+            h_proj = float(str(row[col_map['home_proj']]).strip())
+            a_odds = row[col_map['away_odds']]
+            h_odds = row[col_map['home_odds']]
+        except:
+            # Silently pass incomplete rows that lack active quantitative parameters
             continue
 
-        # Core Mathematical Calculations
-        total_projected_runs = away_projected_runs + home_projected_runs
+        # Mathematical Execution Engine
+        total_runs = a_proj + h_proj
+        if total_runs <= 0:
+            continue
+            
+        # 1. Calculated Model Probabilities
+        model_away_p = a_proj / total_runs
+        model_home_p = h_proj / total_runs
         
-        if total_projected_runs > 0:
-            model_away_probability = away_projected_runs / total_projected_runs
-            model_home_probability = home_projected_runs / total_projected_runs
-        else:
-            model_away_probability, model_home_probability = 0.50, 0.50
+        # 2. Implied Vegas Line Probabilities
+        vegas_away_p = parse_american_odds(a_odds)
+        vegas_home_p = parse_american_odds(h_odds)
+        
+        # 3. True Discrepancy Margin (Expected Value % Edge)
+        away_ev = (model_away_p - vegas_away_p) * 100
+        home_ev = (model_home_p - vegas_home_p) * 100
 
-        # Calculate Vegas Implied Odds
-        vegas_away_probability = calculate_american_odds_probability(vegas_away_odds)
-        vegas_home_probability = calculate_american_odds_probability(vegas_home_odds)
-
-        # Calculate Expected Value (EV) Discrepancy Margin
-        away_expected_value = (model_away_probability - vegas_away_probability) * 100
-        home_expected_value = (model_home_probability - vegas_home_probability) * 100
-
-        processed_games.append({
-            'away': away_team_raw,
-            'home': home_team_raw,
-            'away_proj': away_projected_runs,
-            'home_proj': home_projected_runs,
-            'vegas_away_odds': vegas_away_odds,
-            'vegas_home_odds': vegas_home_odds,
-            'model_away_prob': model_away_probability,
-            'model_home_prob': model_home_probability,
-            'vegas_away_prob': vegas_away_probability,
-            'vegas_home_prob': vegas_home_probability,
-            'away_ev': away_expected_value,
-            'home_ev': home_expected_value
+        games_list.append({
+            'away': a_team, 'home': h_team, 'away_proj': a_proj, 'home_proj': h_proj,
+            'away_odds': a_odds, 'home_odds': h_odds,
+            'model_away_p': model_away_p, 'model_home_p': model_home_p,
+            'vegas_away_p': vegas_away_p, 'vegas_home_p': vegas_home_p,
+            'away_ev': away_ev, 'home_ev': home_ev
         })
 
-    # Display Analytics Dashboard Report
+    # Output Analytical Dashboard directly to the user console Terminal
     print("\n" + "="*75)
-    print(" 📊 SYSTEM STATUS: SUCCESSFUL DATA AGGREGATION & ANALYSIS")
+    print(" 📊 PRODUCTION MLB BETTING MODEL TARGETS")
     print("="*75)
 
-    if not processed_games:
-        print("⚠ No valid matchup data could be processed. Please check your data formatting columns.")
-        print("="*75)
-        return
-
-    # Section 1: Output Best Favorites (Strong model win probability paired with positive EV)
-    print("\n🎯 TOP VALUE FAVORITES (Market Discrepancy High-Conviction)")
+    # Filter Strategy A: Top Calculated Favorites (True Favorite Value)
+    print("\n🎯 TOP VALUE FAVORITES")
     print("-" * 75)
-    favorites_count = 0
-    for game in processed_games:
-        if game['away_ev'] > 5.0 and game['model_away_prob'] > 0.55:
-            print(f"• {game['away']} (Away) at {game['home']} (Home)")
-            print(f"  ↳ True Model Target: {game['model_away_prob']:.1%} | Vegas Implied Line: {game['vegas_away_prob']:.1%}")
-            print(f"  ↳ Statistical Edge: {game['away_ev']:+.2f}% Win Probability Advantage")
-            print(f"  ↳ Analytics: Model projects a clear {game['away_proj']:.1f} to {game['home_proj']:.1f} run margin.")
-            favorites_count += 1
-        if game['home_ev'] > 5.0 and game['model_home_prob'] > 0.55:
-            print(f"• {game['home']} (Home) vs. {game['away']} (Away)")
-            print(f"  ↳ True Model Target: {game['model_home_prob']:.1%} | Vegas Implied Line: {game['vegas_home_prob']:.1%}")
-            print(f"  ↳ Statistical Edge: {game['home_ev']:+.2f}% Win Probability Advantage")
-            print(f"  ↳ Analytics: Model projects a clear {game['home_proj']:.1f} to {game['away_proj']:.1f} run margin.")
-            favorites_count += 1
-    if favorites_count == 0:
-        print("  No matchups currently cross the threshold for clear favorite value picks.")
+    f_count = 0
+    for g in games_list:
+        if g['away_ev'] >= 4.0 and g['model_away_p'] > 0.52:
+            print(f"• {g['away']} (Away) at {g['home']}")
+            print(f"  ↳ Model True Probability: {g['model_away_p']:.1%} | Market Implied: {g['vegas_away_p']:.1%}")
+            print(f"  ↳ Measured Value Edge: {g['away_ev']:+.2f}% EV")
+            print(f"  ↳ Analytics: Model projects a clear {g['away_proj']:.1f} to {g['home_proj']:.1f} score margin.")
+            f_count += 1
+        if g['home_ev'] >= 4.0 and g['model_home_p'] > 0.52:
+            print(f"• {g['home']} (Home) vs. {g['away']}")
+            print(f"  ↳ Model True Probability: {g['model_home_p']:.1%} | Market Implied: {g['vegas_home_p']:.1%}")
+            print(f"  ↳ Measured Value Edge: {g['home_ev']:+.2f}% EV")
+            print(f"  ↳ Analytics: Model projects a clear {g['home_proj']:.1f} to {g['away_proj']:.1f} score margin.")
+            f_count += 1
+    if f_count == 0:
+        print("  No current matchups qualify under strict favorite value edge targets.")
 
-    # Section 2: Output Value Underdogs / Pick'ems
-    print("\n🐶 LIVE VALUE UNDERDOGS (Plus-Money Advantage Picks)")
+    # Filter Strategy B: Top Calculated Underdogs / Pick'ems
+    print("\n🐶 LIVE VALUE UNDERDOGS & SQUADS")
     print("-" * 75)
-    underdogs_count = 0
-    for game in processed_games:
-        if game['away_ev'] > 3.0 and game['vegas_away_prob'] <= 0.51:
-            print(f"• {game['away']} (Away) at {game['home']} (Home) [Line: {game['vegas_away_odds']}]")
-            print(f"  ↳ True Model Target: {game['model_away_prob']:.1%} | Vegas Implied Line: {game['vegas_away_prob']:.1%}")
-            print(f"  ↳ Statistical Edge: {game['away_ev']:+.2f}% Expected Value Margin")
-            print(f"  ↳ Analytics: Market implies minor/dog odds, but model run score margin dictates a {game['away_proj']:.1f} performance capability.")
-            underdogs_count += 1
-        if game['home_ev'] > 3.0 and game['vegas_home_prob'] <= 0.51:
-            print(f"• {game['home']} (Home) vs. {game['away']} (Away) [Line: {game['vegas_home_odds']}]")
-            print(f"  ↳ True Model Target: {game['model_home_prob']:.1%} | Vegas Implied Line: {game['vegas_home_prob']:.1%}")
-            print(f"  ↳ Statistical Edge: {game['home_ev']:+.2f}% Expected Value Margin")
-            print(f"  ↳ Analytics: Market implies minor/dog odds, but model run score margin dictates a {game['home_proj']:.1f} performance capability.")
-            underdogs_count += 1
-    if underdogs_count == 0:
-        print("  No underdog/pick'em matchups currently cross the threshold for positive expected value.")
+    u_count = 0
+    for g in games_list:
+        if g['away_ev'] >= 2.0 and g['vegas_away_p'] <= 0.51:
+            print(f"• {g['away']} (Away) at {g['home']} [Line: {g['away_odds']}]")
+            print(f"  ↳ Model True Probability: {g['model_away_p']:.1%} | Market Implied: {g['vegas_away_p']:.1%}")
+            print(f"  ↳ Measured Value Edge: {g['away_ev']:+.2f}% EV")
+            print(f"  ↳ Analytics: Line underprices squad capabilities against projected {g['home_proj']:.1f} home defense.")
+            u_count += 1
+        if g['home_ev'] >= 2.0 and g['vegas_home_p'] <= 0.51:
+            print(f"• {g['home']} (Home) vs. {g['away']} [Line: {g['home_odds']}]")
+            print(f"  ↳ Model True Probability: {g['model_home_p']:.1%} | Market Implied: {g['vegas_home_p']:.1%}")
+            print(f"  ↳ Measured Value Edge: {g['home_ev']:+.2f}% EV")
+            print(f"  ↳ Analytics: Line underprices squad capabilities against projected {g['away_proj']:.1f} away offense.")
+            u_count += 1
+    if u_count == 0:
+        print("  No current plus-money or pick'em matchups present a calculated data discrepancy.")
 
     print("\n" + "="*75)
 
 if __name__ == "__main__":
-    run_mlb_betting_model()
+    build_mlb_dashboard()
