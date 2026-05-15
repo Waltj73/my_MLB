@@ -1,476 +1,158 @@
-import streamlit as st
 import pandas as pd
+import numpy as np
 
-# ============================================================
-# PAGE CONFIG
-# ============================================================
-
-st.set_page_config(
-    page_title="MLB Command Center",
-    layout="wide"
-)
-
-# ============================================================
-# GOOGLE SHEET SETTINGS
-# ============================================================
-
-SHEET_ID = "1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0"
-SHEET_NAME = "APP_EXPORT"
-
-URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}"
-
-EV_THRESHOLD = 5
-DIFF_THRESHOLD = 5
-HIGH_EV_THRESHOLD = 10
-
-
-# ============================================================
-# LOAD DATA
-# ============================================================
-
-@st.cache_data(ttl=30)
-def load_data():
+def fetch_and_analyze_mlb():
+    # Public CSV export link for your specific Google Sheet and GID
+    sheet_id = "1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0"
+    gid = "1240994733"
+    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+    
+    print("🔄 Fetching live data from MLB Matchups Sheet...")
     try:
-        df = pd.read_csv(URL)
-        df.columns = [str(c).strip() for c in df.columns]
-        return df.fillna("")
+        # Read data starting from Row 2 (index 1) to bypass the main title row if present, 
+        # or read directly if standard format.
+        df = pd.read_csv(csv_url)
     except Exception as e:
-        st.error(f"Sync Error: {e}")
-        return pd.DataFrame()
+        print(f"❌ Error fetching data: {e}")
+        return
 
-
-# ============================================================
-# HELPERS
-# ============================================================
-
-def to_num(v):
-    try:
-        return float(
-            str(v)
-            .replace("%", "")
-            .replace("+", "")
-            .replace(",", "")
-            .strip()
-        )
-    except Exception:
-        return 0.0
-
-
-def normalize(v):
-    return str(v).strip().upper()
-
-
-def is_dog(odds):
-    return to_num(odds) > 0
-
-
-def edge_tier(ev):
-    ev = to_num(ev)
-
-    if ev >= 20:
-        return "🟢 Elite Edge"
-    if ev >= 15:
-        return "🔵 Strong Edge"
-    if ev >= 10:
-        return "🟡 Value Edge"
-    if ev >= 5:
-        return "⚪ Small Edge"
-
-    return "No Edge"
-
-
-def get_pick(row):
-    away_ev = to_num(row["EV Away"])
-    home_ev = to_num(row["EV Home"])
-
-    away_diff = to_num(row["Diff Away"])
-    home_diff = to_num(row["Diff Home"])
-
-    away_play = away_ev > EV_THRESHOLD and away_diff >= DIFF_THRESHOLD
-    home_play = home_ev > EV_THRESHOLD and home_diff >= DIFF_THRESHOLD
-
-    if away_play and (away_ev >= home_ev or not home_play):
-        return row["Away Team"], "Away", away_ev, away_diff, row["Away Odds"]
-
-    if home_play and (home_ev > away_ev or not away_play):
-        return row["Home Team"], "Home", home_ev, home_diff, row["Home Odds"]
-
-    return "PASS", "Pass", max(away_ev, home_ev), max(away_diff, home_diff), ""
-
-
-def grade_play(ev, diff):
-    ev = to_num(ev)
-    diff = to_num(diff)
-
-    if ev >= 20 and diff >= 10:
-        return "Strong Play"
-    if ev >= 10 and diff >= 5:
-        return "Playable"
-    if ev > 5:
-        return "Lean"
-
-    return "Pass"
-
-
-def sharp_read(row):
-    pick = row["Model Pick"]
-    sharp_dog = str(row["Sharp Dog"]).strip()
-
-    if pick == "PASS":
-        return "No model pick."
-
-    if sharp_dog == "":
-        return "No sharp dog listed."
-
-    if normalize(pick) == normalize(sharp_dog):
-        return "Sharp side and model pick are aligned."
-
-    return f"Sharp side points to {sharp_dog}, while the model points to {pick}. Conflict spot."
-
-
-# ============================================================
-# COLOR CODING
-# ============================================================
-
-def color_board(row):
-    styles = [""] * len(row)
-    col = {c: i for i, c in enumerate(row.index)}
-
-    # EV columns
-    for c in ["EV Away", "EV Home", "Pick EV"]:
-        if c in col:
-            val = to_num(row[c])
-
-            if val >= 20:
-                styles[col[c]] = "background-color:#00a651;color:white;font-weight:bold;"
-            elif val >= 10:
-                styles[col[c]] = "background-color:#a9dfbf;color:black;font-weight:bold;"
-            elif val > 0:
-                styles[col[c]] = "background-color:#e8f8f5;color:black;"
-            elif val < 0:
-                styles[col[c]] = "background-color:#f5b7b1;color:black;"
-
-    # Diff columns
-    for c in ["Diff Away", "Diff Home", "Pick Diff"]:
-        if c in col:
-            val = to_num(row[c])
-
-            if val >= 10:
-                styles[col[c]] = "background-color:#d4efdf;color:black;font-weight:bold;"
-            elif val >= 5:
-                styles[col[c]] = "background-color:#fff3cd;color:black;"
-            elif val <= -10:
-                styles[col[c]] = "background-color:#f5b7b1;color:black;"
-
-    # Model Pick
-    if "Model Pick" in col:
-        if row["Model Pick"] != "PASS":
-            styles[col["Model Pick"]] = "background-color:#1e8449;color:white;font-weight:bold;"
+    # Clean up column names (remove leading/trailing spaces and lowercase them for robust matching)
+    df.columns = df.columns.str.strip().str.lower()
+    
+    # ─── MAPPING EXPECTED COLUMNS ───
+    # We dynamically find the right columns even if naming varies slightly
+    col_mapping = {
+        'away': ['away', 'away team', 'away_team', 'visitor'],
+        'home': ['home', 'home team', 'home_team', 'local'],
+        'away_proj': ['away proj', 'away projected runs', 'away_projected', 'away_proj_runs'],
+        'home_proj': ['home proj', 'home projected runs', 'home_projected', 'home_proj_runs'],
+        'vegas_away': ['vegas away', 'away odds', 'away line', 'vegas_away_line'],
+        'vegas_home': ['vegas home', 'home odds', 'home line', 'vegas_home_line']
+    }
+    
+    final_cols = {}
+    for standard_name, options in col_mapping.items():
+        matched = [col for col in df.columns if col in options]
+        if matched:
+            final_cols[standard_name] = matched[0]
         else:
-            styles[col["Model Pick"]] = "background-color:#eeeeee;color:#777;"
-
-    # Grade
-    if "Grade" in col:
-        if row["Grade"] == "Strong Play":
-            styles[col["Grade"]] = "background-color:#00a651;color:white;font-weight:bold;"
-        elif row["Grade"] == "Playable":
-            styles[col["Grade"]] = "background-color:#a9dfbf;color:black;font-weight:bold;"
-        elif row["Grade"] == "Lean":
-            styles[col["Grade"]] = "background-color:#fff3cd;color:black;"
-        else:
-            styles[col["Grade"]] = "background-color:#eeeeee;color:#777;"
-
-    # Sharp Dog
-    if "Sharp Dog" in col:
-        if str(row["Sharp Dog"]).strip() != "":
-            styles[col["Sharp Dog"]] = "background-color:#d6eaf8;color:#154360;font-weight:bold;"
-
-    # Signal row: model pick matches sharp dog
-    if (
-        "Model Pick" in row.index
-        and "Sharp Dog" in row.index
-        and row["Model Pick"] != "PASS"
-        and normalize(row["Model Pick"]) == normalize(row["Sharp Dog"])
-    ):
-        for i in range(len(styles)):
-            if styles[i] == "":
-                styles[i] = "background-color:#eef7ff;"
-
-    return styles
-
-
-# ============================================================
-# WRITEUPS
-# ============================================================
-
-def writeup(row):
-    if row["Model Pick"] == "PASS":
-        return f"""
-### {row['Away Team']} @ {row['Home Team']}
-
-**PASS**
-
-No clean model edge. Neither side meets both thresholds:
-
-- EV > {EV_THRESHOLD}
-- Diff >= {DIFF_THRESHOLD}
-
-This is a skip unless you have outside matchup information that strongly changes the read.
-"""
-
-    pick = row["Model Pick"]
-    side = row["Pick Side"]
-    odds = row["Pick Odds"]
-    ev = row["Pick EV"]
-    diff = row["Pick Diff"]
-    grade = row["Grade"]
-    sharp_dog = str(row["Sharp Dog"]).strip()
-
-    if side == "Away":
-        opponent = row["Home Team"]
-        win_pct = row["My Win Away"]
-        vegas_pct = row["Vegas Win Away"]
-        sharp_ml = row["Sharp Away"]
-        opponent_ev = row["EV Home"]
-        opponent_diff = row["Diff Home"]
-    else:
-        opponent = row["Away Team"]
-        win_pct = row["My Win Home"]
-        vegas_pct = row["Vegas Win Home"]
-        sharp_ml = row["Sharp Home"]
-        opponent_ev = row["EV Away"]
-        opponent_diff = row["Diff Away"]
-
-    dog_note = "underdog value play" if is_dog(odds) else "favorite value play"
-
-    return f"""
-### {row['Away Team']} @ {row['Home Team']}
-
-## Pick: {pick} ML ({odds})
-
-**Grade:** {grade}  
-**Type:** {dog_note}  
-**Tier:** {edge_tier(ev)}
-
----
-
-### Model vs Market
-
-- Model Win %: **{win_pct}**
-- Vegas Win %: **{vegas_pct}**
-- Difference: **{diff:.2f}%**
-- Expected Value: **{ev:.2f}**
-- Opponent EV: **{opponent_ev}**
-- Opponent Diff: **{opponent_diff}**
-
----
-
-### Why This Is a Play
-
-Your sheet is showing value on **{pick}** because that side clears your minimum requirements:
-
-- EV is above **{EV_THRESHOLD}**
-- Diff is at least **{DIFF_THRESHOLD}**
-- The opposing side does not grade better by your model
-
-Against **{opponent}**, this is not just a “who wins” pick. It is a pricing play. Your numbers suggest the market is not fully accounting for the win probability your model gives to **{pick}**.
-
----
-
-### Sharp / Market Read
-
-- Sharp Dog: **{sharp_dog if sharp_dog else "None"}**
-- Pick Sharp ML: **{sharp_ml}**
-- Read: **{sharp_read(row)}**
-
-If the sharp dog agrees with your model pick, confidence improves.  
-If the sharp dog conflicts with your model pick, this becomes a caution spot even if EV is positive.
-
----
-
-### Final Read
-
-This qualifies as a **{grade}**.
-
-Best use:
-- Straight bet first
-- Smaller sizing if sharp data conflicts
-- Be careful using it as a parlay leg if the price is heavy
-"""
-
-
-# ============================================================
-# LOAD + VALIDATE
-# ============================================================
-
-df = load_data()
-
-if df.empty:
-    st.stop()
-
-required_cols = [
-    "Away Team",
-    "Home Team",
-    "Away Odds",
-    "Home Odds",
-    "Sharp Away",
-    "Sharp Home",
-    "Sharp Dog",
-    "Vegas Win Away",
-    "Vegas Win Home",
-    "My Win Away",
-    "My Win Home",
-    "Diff Away",
-    "Diff Home",
-    "EV Away",
-    "EV Home",
-]
-
-missing = [c for c in required_cols if c not in df.columns]
-
-if missing:
-    st.error(f"Missing columns in APP_EXPORT: {missing}")
-    st.write("Detected columns:")
-    st.write(list(df.columns))
-    st.stop()
-
-df = df[df["Away Team"].astype(str).str.strip() != ""].copy()
-
-
-# ============================================================
-# BUILD MODEL FIELDS
-# ============================================================
-
-picks = df.apply(get_pick, axis=1)
-
-df["Model Pick"] = [p[0] for p in picks]
-df["Pick Side"] = [p[1] for p in picks]
-df["Pick EV"] = [p[2] for p in picks]
-df["Pick Diff"] = [p[3] for p in picks]
-df["Pick Odds"] = [p[4] for p in picks]
-
-df["Grade"] = df.apply(
-    lambda r: grade_play(r["Pick EV"], r["Pick Diff"]),
-    axis=1
-)
-
-model_plays = df[df["Model Pick"] != "PASS"].copy()
-
-top_plays = model_plays.sort_values(
-    by=["Pick EV", "Pick Diff"],
-    ascending=[False, False]
-).head(5)
-
-dogs = model_plays[
-    model_plays.apply(lambda r: is_dog(r["Pick Odds"]), axis=1)
-].sort_values(
-    by=["Pick EV", "Pick Diff"],
-    ascending=[False, False]
-)
-
-signals = model_plays[
-    model_plays.apply(
-        lambda r: normalize(r["Model Pick"]) == normalize(r["Sharp Dog"]),
-        axis=1
-    )
-].sort_values(
-    by=["Pick EV", "Pick Diff"],
-    ascending=[False, False]
-)
-
-
-# ============================================================
-# DISPLAY
-# ============================================================
-
-st.title("⚾ MLB Command Center")
-st.caption("Reading directly from APP_EXPORT")
-
-c1, c2, c3, c4 = st.columns(4)
-
-c1.metric("Games", len(df))
-c2.metric("Model Plays", len(model_plays))
-c3.metric("Underdogs", len(dogs))
-c4.metric("Signal Plays", len(signals))
-
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "All Games",
-    "Top 5 Plays",
-    "Underdogs",
-    "Signal Plays",
-    "Writeups",
-    "Sharp Reads"
-])
-
-with tab1:
-    st.subheader("All Games")
-    st.dataframe(
-        df.style.apply(color_board, axis=1),
-        use_container_width=True,
-        hide_index=True
-    )
-
-with tab2:
-    st.subheader("Top 5 Model Plays")
-
-    if top_plays.empty:
-        st.info("No model plays found.")
-    else:
-        st.dataframe(
-            top_plays.style.apply(color_board, axis=1),
-            use_container_width=True,
-            hide_index=True
-        )
-
-with tab3:
-    st.subheader("Underdog Plays")
-
-    if dogs.empty:
-        st.info("No underdog plays found.")
-    else:
-        st.dataframe(
-            dogs.style.apply(color_board, axis=1),
-            use_container_width=True,
-            hide_index=True
-        )
-
-with tab4:
-    st.subheader("Signal Plays")
-
-    if signals.empty:
-        st.info("No sharp/model alignment plays found.")
-    else:
-        st.dataframe(
-            signals.style.apply(color_board, axis=1),
-            use_container_width=True,
-            hide_index=True
-        )
-
-with tab5:
-    st.subheader("Writeups")
-
-    if model_plays.empty:
-        st.info("No model plays to write up.")
-    else:
-        for _, row in model_plays.sort_values(by="Pick EV", ascending=False).iterrows():
-            st.markdown(writeup(row))
-            st.divider()
-
-with tab6:
-    st.subheader("Sharp Reads")
+            # Fallback to structural positioning if named columns aren't matched cleanly
+            if standard_name == 'away': final_cols[standard_name] = df.columns[0]
+            elif standard_name == 'home': final_cols[standard_name] = df.columns[1]
+            elif standard_name == 'away_proj': final_cols[standard_name] = df.columns[2]
+            elif standard_name == 'home_proj': final_cols[standard_name] = df.columns[3]
+            elif standard_name == 'vegas_away': final_cols[standard_name] = df.columns[4]
+            elif standard_name == 'vegas_home': final_cols[standard_name] = df.columns[5]
+
+    # Clean data rows (drop rows where team names or key metrics are missing)
+    df = df.dropna(subset=[final_cols['away'], final_cols['home']])
+    
+    # Helper function to convert American Odds to Implied Probability
+    def odds_to_prob(odds):
+        try:
+            odds = float(str(odds).replace('+', '').strip())
+            if odds > 0:
+                return 100 / (odds + 100)
+            else:
+                return abs(odds) / (abs(odds) + 100)
+        except:
+            return 0.50  # Default fallback if line is unreadable
+
+    results = []
 
     for _, row in df.iterrows():
-        if str(row["Sharp Dog"]).strip() == "":
+        away_team = str(row[final_cols['away']]).strip()
+        home_team = str(row[final_cols['home']]).strip()
+        
+        # Skip header duplicates or empty placeholder rows
+        if "team" in away_team.lower() or away_team == "":
+            continue
+            
+        try:
+            # Parse metrics safely
+            a_proj = float(row[final_cols['away_proj']])
+            h_proj = float(row[final_cols['home_proj']])
+            v_away = row[final_cols['vegas_away']]
+            v_home = row[final_cols['vegas_home']]
+        except Exception:
+            # Skip rows that don't contain valid numeric projection figures yet
             continue
 
-        st.markdown(
-            f"""
-### {row['Away Team']} @ {row['Home Team']}
+        # ─── METRIC ENGINE ───
+        # 1. Calculate Model True Win Probabilities based on custom run differentials
+        total_proj_runs = a_proj + h_proj
+        if total_proj_runs > 0:
+            model_away_prob = a_proj / total_proj_runs
+            model_home_prob = h_proj / total_proj_runs
+        else:
+            model_away_prob, model_home_prob = 0.50, 0.50
 
-**Sharp Dog:** {row['Sharp Dog']}  
-**Model Pick:** {row['Model Pick']}  
-**Read:** {sharp_read(row)}
+        # 2. Get Vegas Implied Probabilities
+        vegas_away_prob = odds_to_prob(v_away)
+        vegas_home_prob = odds_to_prob(v_home)
 
----
-"""
-        )
+        # 3. Calculate Expected Value (EV) Discrepancies
+        away_ev = (model_away_prob - vegas_away_prob) * 100
+        home_ev = (model_home_prob - vegas_home_prob) * 100
+
+        # Package data for analysis
+        results.append({
+            'Away': away_team, 'Home': home_team,
+            'Away Proj': a_proj, 'Home Proj': h_proj,
+            'Vegas Away': v_away, 'Vegas Home': v_home,
+            'Away Model Prob': model_away_prob, 'Home Model Prob': model_home_prob,
+            'Away Vegas Prob': vegas_away_prob, 'Home Vegas Prob': vegas_home_prob,
+            'Away EV': away_ev, 'Home EV': home_ev
+        })
+
+    # ─── ANALYTICAL OUTPUT REPORTING ───
+    print("\n" + "="*70)
+    print(" 📊 LIVE MLB BETTING MODEL ANALYSIS & INSIGHTS")
+    print("="*70)
+
+    # 1. Filter Top Value Favorites (Model favors team, and price holds clear positive EV)
+    print("\n🎯 TOP VALUE FAVORITES (Market Discrepancy Picks)")
+    print("-" * 70)
+    fav_found = False
+    for match in results:
+        # Identify if Away or Home is the calculated value choice
+        if match['Away EV'] > 5 and match['Away Model Prob'] > 0.55:
+            print(f"• {match['Away']} (at {match['Home']})")
+            print(f"  ↳ True Odds Projection: {match['Away Model Prob']:.1%} | Vegas Implied: {match['Away Vegas Prob']:.1%}")
+            print(f"  ↳ Edge: {match['Away EV']:+.2f}% Win Probability Discrepancy")
+            print(f"  ↳ Why: Model projects a clear {match['Away Proj']:.1f} to {match['Home Proj']:.1f} run margin.")
+            fav_found = True
+        if match['Home EV'] > 5 and match['Home Model Prob'] > 0.55:
+            print(f"• {match['Home']} (vs. {match['Away']})")
+            print(f"  ↳ True Odds Projection: {match['Home Model Prob']:.1%} | Vegas Implied: {match['Home Vegas Prob']:.1%}")
+            print(f"  ↳ Edge: {match['Home EV']:+.2f}% Win Probability Discrepancy")
+            print(f"  ↳ Why: Home advantage coupled with a {match['Home Proj']:.1f} to {match['Away Proj']:.1f} run projection.")
+            fav_found = True
+    if not fav_found:
+        print("  No heavy favorites currently meet the high-threshold EV requirements today.")
+
+    # 2. Filter Live Underdogs/Pick'ems
+    print("\n🐶 LIVE VALUE UNDERDOGS & SPLIT SQUADS")
+    print("-" * 70)
+    dog_found = False
+    for match in results:
+        # Checking for positive expected value where market implied probability is lower/underdog status
+        if match['Away EV'] > 3 and match['Away Vegas Prob'] <= 0.51:
+            print(f"• {match['Away']} (at {match['Home']}) [Line: {match['Vegas Away']}]")
+            print(f"  ↳ True Odds Projection: {match['Away Model Prob']:.1%} | Vegas Implied: {match['Away Vegas Prob']:.1%}")
+            print(f"  ↳ Edge: {match['Away EV']:+.2f}% Expected Value")
+            print(f"  ↳ Why: Market implies sub-50% odds, but custom metrics show a {match['Away Proj']:.1f} run projection capability.")
+            dog_found = True
+        if match['Home EV'] > 3 and match['Home Vegas Prob'] <= 0.51:
+            print(f"• {match['Home']} (vs. {match['Away']}) [Line: {match['Vegas Home']}]")
+            print(f"  ↳ True Odds Projection: {match['Home Model Prob']:.1%} | Vegas Implied: {match['Home Vegas Prob']:.1%}")
+            print(f"  ↳ Edge: {match['Home EV']:+.2f}% Expected Value")
+            print(f"  ↳ Why: Plus-money pricing or flat pick'em line completely ignores the local {match['Home Proj']:.1f} to {match['Away Proj']:.1f} model run margin.")
+            dog_found = True
+    if not dog_found:
+        print("  No underdog plays met raw positive EV conditions based on active data.")
+
+    print("\n" + "="*70)
+
+if __name__ == "__main__":
+    fetch_and_analyze_mlb()
