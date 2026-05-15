@@ -128,6 +128,81 @@ def sharp_read(row):
     return f"Sharp side points to {sharp_dog}, while the model points to {pick}. Conflict spot."
 
 
+# ============================================================
+# COLOR CODING
+# ============================================================
+
+def color_board(row):
+    styles = [""] * len(row)
+    col = {c: i for i, c in enumerate(row.index)}
+
+    # EV columns
+    for c in ["EV Away", "EV Home", "Pick EV"]:
+        if c in col:
+            val = to_num(row[c])
+
+            if val >= 20:
+                styles[col[c]] = "background-color:#00a651;color:white;font-weight:bold;"
+            elif val >= 10:
+                styles[col[c]] = "background-color:#a9dfbf;color:black;font-weight:bold;"
+            elif val > 0:
+                styles[col[c]] = "background-color:#e8f8f5;color:black;"
+            elif val < 0:
+                styles[col[c]] = "background-color:#f5b7b1;color:black;"
+
+    # Diff columns
+    for c in ["Diff Away", "Diff Home", "Pick Diff"]:
+        if c in col:
+            val = to_num(row[c])
+
+            if val >= 10:
+                styles[col[c]] = "background-color:#d4efdf;color:black;font-weight:bold;"
+            elif val >= 5:
+                styles[col[c]] = "background-color:#fff3cd;color:black;"
+            elif val <= -10:
+                styles[col[c]] = "background-color:#f5b7b1;color:black;"
+
+    # Model Pick
+    if "Model Pick" in col:
+        if row["Model Pick"] != "PASS":
+            styles[col["Model Pick"]] = "background-color:#1e8449;color:white;font-weight:bold;"
+        else:
+            styles[col["Model Pick"]] = "background-color:#eeeeee;color:#777;"
+
+    # Grade
+    if "Grade" in col:
+        if row["Grade"] == "Strong Play":
+            styles[col["Grade"]] = "background-color:#00a651;color:white;font-weight:bold;"
+        elif row["Grade"] == "Playable":
+            styles[col["Grade"]] = "background-color:#a9dfbf;color:black;font-weight:bold;"
+        elif row["Grade"] == "Lean":
+            styles[col["Grade"]] = "background-color:#fff3cd;color:black;"
+        else:
+            styles[col["Grade"]] = "background-color:#eeeeee;color:#777;"
+
+    # Sharp Dog
+    if "Sharp Dog" in col:
+        if str(row["Sharp Dog"]).strip() != "":
+            styles[col["Sharp Dog"]] = "background-color:#d6eaf8;color:#154360;font-weight:bold;"
+
+    # Signal row: model pick matches sharp dog
+    if (
+        "Model Pick" in row.index
+        and "Sharp Dog" in row.index
+        and row["Model Pick"] != "PASS"
+        and normalize(row["Model Pick"]) == normalize(row["Sharp Dog"])
+    ):
+        for i in range(len(styles)):
+            if styles[i] == "":
+                styles[i] = "background-color:#eef7ff;"
+
+    return styles
+
+
+# ============================================================
+# WRITEUPS
+# ============================================================
+
 def writeup(row):
     if row["Model Pick"] == "PASS":
         return f"""
@@ -249,7 +324,6 @@ required_cols = [
     "Diff Home",
     "EV Away",
     "EV Home",
-    "Pick",
 ]
 
 missing = [c for c in required_cols if c not in df.columns]
@@ -264,7 +338,7 @@ df = df[df["Away Team"].astype(str).str.strip() != ""].copy()
 
 
 # ============================================================
-# BUILD APP MODEL FIELDS
+# BUILD MODEL FIELDS
 # ============================================================
 
 picks = df.apply(get_pick, axis=1)
@@ -279,8 +353,6 @@ df["Grade"] = df.apply(
     lambda r: grade_play(r["Pick EV"], r["Pick Diff"]),
     axis=1
 )
-
-df["Sharp Read"] = df.apply(sharp_read, axis=1)
 
 model_plays = df[df["Model Pick"] != "PASS"].copy()
 
@@ -321,17 +393,22 @@ c2.metric("Model Plays", len(model_plays))
 c3.metric("Underdogs", len(dogs))
 c4.metric("Signal Plays", len(signals))
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "All Games",
     "Top 5 Plays",
     "Underdogs",
     "Signal Plays",
-    "Writeups"
+    "Writeups",
+    "Sharp Reads"
 ])
 
 with tab1:
     st.subheader("All Games")
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(
+        df.style.apply(color_board, axis=1),
+        use_container_width=True,
+        hide_index=True
+    )
 
 with tab2:
     st.subheader("Top 5 Model Plays")
@@ -339,7 +416,11 @@ with tab2:
     if top_plays.empty:
         st.info("No model plays found.")
     else:
-        st.dataframe(top_plays, use_container_width=True, hide_index=True)
+        st.dataframe(
+            top_plays.style.apply(color_board, axis=1),
+            use_container_width=True,
+            hide_index=True
+        )
 
 with tab3:
     st.subheader("Underdog Plays")
@@ -347,7 +428,11 @@ with tab3:
     if dogs.empty:
         st.info("No underdog plays found.")
     else:
-        st.dataframe(dogs, use_container_width=True, hide_index=True)
+        st.dataframe(
+            dogs.style.apply(color_board, axis=1),
+            use_container_width=True,
+            hide_index=True
+        )
 
 with tab4:
     st.subheader("Signal Plays")
@@ -355,7 +440,11 @@ with tab4:
     if signals.empty:
         st.info("No sharp/model alignment plays found.")
     else:
-        st.dataframe(signals, use_container_width=True, hide_index=True)
+        st.dataframe(
+            signals.style.apply(color_board, axis=1),
+            use_container_width=True,
+            hide_index=True
+        )
 
 with tab5:
     st.subheader("Writeups")
@@ -366,3 +455,22 @@ with tab5:
         for _, row in model_plays.sort_values(by="Pick EV", ascending=False).iterrows():
             st.markdown(writeup(row))
             st.divider()
+
+with tab6:
+    st.subheader("Sharp Reads")
+
+    for _, row in df.iterrows():
+        if str(row["Sharp Dog"]).strip() == "":
+            continue
+
+        st.markdown(
+            f"""
+### {row['Away Team']} @ {row['Home Team']}
+
+**Sharp Dog:** {row['Sharp Dog']}  
+**Model Pick:** {row['Model Pick']}  
+**Read:** {sharp_read(row)}
+
+---
+"""
+        )
