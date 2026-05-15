@@ -1,7 +1,5 @@
 import streamlit as st
 import pandas as pd
-import os
-from google import genai
 
 # ============================================================
 # PAGE CONFIG
@@ -13,7 +11,7 @@ st.set_page_config(
 )
 
 # ============================================================
-# GOOGLE SHEET & AI CLIENT SETTINGS
+# GOOGLE SHEET SETTINGS
 # ============================================================
 
 SHEET_ID = "1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0"
@@ -25,18 +23,6 @@ EV_THRESHOLD = 5
 DIFF_THRESHOLD = 5
 HIGH_EV_THRESHOLD = 10
 
-# Initialize the GenAI Client safely using Streamlit's hidden vault or env vars
-@st.cache_resource
-def get_genai_client():
-    try:
-        api_key = st.secrets.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        if api_key:
-            return genai.Client(api_key=api_key)
-    except Exception:
-        pass
-    return None
-
-client = get_genai_client()
 
 # ============================================================
 # LOAD DATA
@@ -214,45 +200,6 @@ def color_board(row):
 
 
 # ============================================================
-# ADVANCED AI NARRATIVE ENGINE
-# ============================================================
-
-@st.cache_data(show_spinner=False)
-def generate_ai_narrative(row_dict):
-    """
-    Calls the unified Google GenAI client to compose an elegant, professional
-    matchup write-up tailored exactly to your quantitative models.
-    """
-    if client is None:
-        return "_⚠️ AI Engine Note: Set up your `GOOGLE_API_KEY` in your `.streamlit/secrets.toml` to replace this template with an active real-time AI analytics breakdown._"
-
-    prompt = f"""
-    You are an expert, numbers-driven sports betting quantitative analyst. 
-    Analyze this single game row state from my custom MLB model and formulate a concise narrative summary:
-    
-    Matchup: {row_dict.get('Away Team')} @ {row_dict.get('Home Team')}
-    Model Pick: {row_dict.get('Model Pick')} ML ({row_dict.get('Pick Odds')})
-    Calculated Metrics: EV={row_dict.get('Pick EV')}, Variance Diff={row_dict.get('Pick Diff')}%, Model Win%={row_dict.get('My Win Away') if row_dict.get('Pick Side') == 'Away' else row_dict.get('My Win Home')}, Vegas Implied Win%={row_dict.get('Vegas Win Away') if row_dict.get('Pick Side') == 'Away' else row_dict.get('Vegas Win Home')}
-    Market Sentiment: Sharp Dog Status={row_dict.get('Sharp Dog')}, Market Context Summary={sharp_read(row_dict)}
-    
-    Write a 3-paragraph executive operational breakdown:
-    1. The Value Disconnect: Explain how our win probability completely beats out the public line or favorite juice.
-    2. Market Flow & Sharp Alignment: Provide a clear tactical read on if the institutional money (Sharp Dog/Sharp ML) is locking steps with our position or if it's a conflict spot.
-    3. Sizing Strategy: Offer a direct recommendation based on the data points.
-    
-    Keep the tone direct, analytical, and highly metrics-focused. Do not repeat basic table data back to me. No filler.
-    """
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
-        return response.text
-    except Exception as e:
-        return f"_❌ AI Briefing Timeout: {e}_"
-
-
-# ============================================================
 # WRITEUPS
 # ============================================================
 
@@ -296,10 +243,6 @@ This is a skip unless you have outside matchup information that strongly changes
 
     dog_note = "underdog value play" if is_dog(odds) else "favorite value play"
 
-    # Convert the row into a serializable dictionary for clean caching
-    row_dict = row.to_dict()
-    ai_narrative = generate_ai_narrative(row_dict)
-
     return f"""
 ### {row['Away Team']} @ {row['Home Team']}
 
@@ -322,16 +265,15 @@ This is a skip unless you have outside matchup information that strongly changes
 
 ---
 
-### Why This Is a Play (Model Assessment)
+### Why This Is a Play
 
 Your sheet is showing value on **{pick}** because that side clears your minimum requirements:
+
 - EV is above **{EV_THRESHOLD}**
 - Diff is at least **{DIFF_THRESHOLD}**
+- The opposing side does not grade better by your model
 
----
-
-### 🤖 Custom Model Narrative Analysis
-{ai_narrative}
+Against **{opponent}**, this is not just a “who wins” pick. It is a pricing play. Your numbers suggest the market is not fully accounting for the win probability your model gives to **{pick}**.
 
 ---
 
@@ -340,6 +282,9 @@ Your sheet is showing value on **{pick}** because that side clears your minimum 
 - Sharp Dog: **{sharp_dog if sharp_dog else "None"}**
 - Pick Sharp ML: **{sharp_ml}**
 - Read: **{sharp_read(row)}**
+
+If the sharp dog agrees with your model pick, confidence improves.  
+If the sharp dog conflicts with your model pick, this becomes a caution spot even if EV is positive.
 
 ---
 
@@ -441,9 +386,6 @@ signals = model_plays[
 st.title("⚾ MLB Command Center")
 st.caption("Reading directly from APP_EXPORT")
 
-if client is None:
-    st.sidebar.warning("🤖 AI Engine Offline: To unlock custom automated narrative analysis, add your key to `.streamlit/secrets.toml`.")
-
 c1, c2, c3, c4 = st.columns(4)
 
 c1.metric("Games", len(df))
@@ -510,11 +452,9 @@ with tab5:
     if model_plays.empty:
         st.info("No model plays to write up.")
     else:
-        # Spinner only loads on first-run data generation to prevent UI stutter
-        with st.spinner("AI Engine generating advanced matchup intelligence briefings..."):
-            for _, row in model_plays.sort_values(by="Pick EV", ascending=False).iterrows():
-                st.markdown(writeup(row))
-                st.divider()
+        for _, row in model_plays.sort_values(by="Pick EV", ascending=False).iterrows():
+            st.markdown(writeup(row))
+            st.divider()
 
 with tab6:
     st.subheader("Sharp Reads")
