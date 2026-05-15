@@ -7,7 +7,7 @@ def parse_american_odds(odds_val):
     """Safely converts betting lines (e.g. -145, +120) to implied probability."""
     try:
         val_str = str(odds_val).replace('+', '').strip()
-        if not val_str or any(x in val_str.lower() for x in ['vs', 'at', '@', 'nan', 'null', 'pk']):
+        if not val_str or any(x in val_str.lower() for x in ['vs', 'at', '@', 'nan', 'null', 'pk', 'team']):
             return 0.50
         num = float(val_str)
         if num > 0:
@@ -17,99 +17,100 @@ def parse_american_odds(odds_val):
     except:
         return 0.50
 
-def run_mlb_live_sheet_model():
-    # Production link configuration targeting the matchups tab
+def run_flawless_mlb_model():
     sheet_id = "1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0"
     gid_id = "1240994733"
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid_id}"
     
-    # Browser headers to prevent Google from blocking or hanging the script
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
     
-    print("🔄 Connecting directly to Google Sheet API stream...")
+    print("🔄 Connecting to live sheet...")
     try:
-        # Fetch with an explicit 10-second timeout so it cannot freeze on a blank screen
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
-        
-        # Read the raw downloaded text data directly into memory
-        raw_df = pd.read_csv(io.StringIO(response.text))
-    except requests.exceptions.Timeout:
-        print("\n❌ CONNECTION TIMEOUT: Google took too long to respond. Try running the script again.")
-        sys.exit(1)
+        # Read raw strings, ignoring initial blank lines completely
+        df = pd.read_csv(io.StringIO(response.text), header=None)
     except Exception as e:
-        print(f"\n❌ ACCESS DENIED: Unable to stream URL data. Error: {e}")
-        print("💡 Quick Fix: Ensure your Google Sheet sharing is set to 'Anyone with the link can view'.")
+        print(f"❌ Connection Blocked by Google: {e}")
         sys.exit(1)
-        
-    # Standardize column labels to drop whitespace/case variations
-    raw_df.columns = raw_df.columns.str.strip().str.lower()
-    
-    # Map column structures dynamically based on positional index fallbacks
-    col_map = {}
-    required_keys = ['away_team', 'home_team', 'away_proj', 'home_proj', 'away_odds', 'home_odds']
-    indices_fallback = [0, 1, 2, 3, 4, 5]
-    
-    # Scan columns for exact context match
-    for col in raw_df.columns:
-        if 'away' in col or 'team 1' in col:
-            if 'proj' in col or 'run' in col: col_map['away_proj'] = col
-            elif 'line' in col or 'odds' in col or 'vegas' in col: col_map['away_odds'] = col
-            else: col_map['away_team'] = col
-        elif 'home' in col or 'team 2' in col:
-            if 'proj' in col or 'run' in col: col_map['home_proj'] = col
-            elif 'line' in col or 'odds' in col or 'vegas' in col: col_map['home_odds'] = col
-            else: col_map['home_team'] = col
 
-    # Bind indices if keyword tracking did not find a 100% match
-    for key, idx in zip(required_keys, indices_fallback):
-        if key not in col_map and len(raw_df.columns) > idx:
-            col_map[key] = raw_df.columns[idx]
+    # --- ADAPTIVE DATA SCANNER ---
+    # Look for the row that actually contains team indicators to establish real data headers
+    header_row_idx = 0
+    for idx, row in df.iterrows():
+        row_str = " ".join(row.dropna().astype(str)).lower()
+        if 'team' in row_str or 'proj' in row_str or 'away' in row_str or 'home' in row_str:
+            header_row_idx = idx
+            break
+
+    # Re-align dataframe using the discovered true data matrix row
+    df.columns = df.iloc[header_row_idx].str.strip().str.lower()
+    df = df.iloc[header_row_idx + 1:].reset_index(drop=True)
+
+    # Track column names based on structural content signatures
+    cols = {}
+    for col in df.columns:
+        if pd.isna(col): continue
+        c_name = str(col).strip().lower()
+        if 'away' in c_name or 'visitor' in c_name or 'team 1' in c_name:
+            if 'proj' in c_name or 'run' in c_name: cols['away_proj'] = col
+            elif 'odds' in c_name or 'line' in c_name or 'vegas' in c_name: cols['away_odds'] = col
+            else: cols['away_team'] = col
+        elif 'home' in c_name or 'local' in c_name or 'team 2' in c_name:
+            if 'proj' in c_name or 'run' in c_name: cols['home_proj'] = col
+            elif 'odds' in c_name or 'line' in c_name or 'vegas' in c_name: cols['home_odds'] = col
+            else: cols['home_team'] = col
+
+    # Hard structural index backup if custom column text matches fail completely
+    fallback_keys = ['away_team', 'home_team', 'away_proj', 'home_proj', 'away_odds', 'home_odds']
+    for i, key in enumerate(fallback_keys):
+        if key not in cols and len(df.columns) > i:
+            cols[key] = df.columns[i]
 
     games_list = []
 
-    # Process data matrices
-    for _, row in raw_df.iterrows():
-        a_team = str(row[col_map['away_team']]).strip()
-        h_team = str(row[col_map['home_team']]).strip()
-        
-        if not a_team or not h_team or 'team' in a_team.lower() or 'nan' in a_team.lower():
-            continue
-            
+    # Processing values loop
+    for _, row in df.iterrows():
         try:
-            a_proj = float(str(row[col_map['away_proj']]).strip())
-            h_proj = float(str(row[col_map['home_proj']]).strip())
-            a_odds = row[col_map['away_odds']]
-            h_odds = row[col_map['home_odds']]
+            a_team = str(row[cols['away_team']]).strip()
+            h_team = str(row[cols['home_team']]).strip()
+            
+            if not a_team or 'nan' in a_team.lower() or 'team' in a_team.lower() or a_team == "":
+                continue
+
+            a_proj = float(str(row[cols['away_proj']]).strip())
+            h_proj = float(str(row[cols['home_proj']]).strip())
+            a_odds = row[cols['away_odds']]
+            h_odds = row[cols['home_odds']]
+            
+            total_runs = a_proj + h_proj
+            if total_runs <= 0: continue
+
+            # Calculations Engine
+            model_away_p = a_proj / total_runs
+            model_home_p = h_proj / total_runs
+            vegas_away_p = parse_american_odds(a_odds)
+            vegas_home_p = parse_american_odds(h_odds)
+            
+            # Column P14 represents EV calculation directly
+            away_ev = (model_away_p - vegas_away_p) * 100
+            home_ev = (model_home_p - vegas_home_p) * 100
+
+            games_list.append({
+                'away': a_team, 'home': h_team, 'away_proj': a_proj, 'home_proj': h_proj,
+                'away_odds': a_odds, 'home_odds': h_odds,
+                'model_away_p': model_away_p, 'model_home_p': model_home_p,
+                'vegas_away_p': vegas_away_p, 'vegas_home_p': vegas_home_p,
+                'away_ev': away_ev, 'home_ev': home_ev
+            })
         except:
             continue
 
-        total_runs = a_proj + h_proj
-        if total_runs <= 0:
-            continue
-            
-        # Run differential math calculation engine
-        model_away_p = a_proj / total_runs
-        model_home_p = h_proj / total_runs
-        vegas_away_p = parse_american_odds(a_odds)
-        vegas_home_p = parse_american_odds(h_odds)
-        
-        away_ev = (model_away_p - vegas_away_p) * 100
-        home_ev = (model_home_p - vegas_home_p) * 100
-
-        games_list.append({
-            'away': a_team, 'home': h_team, 'away_proj': a_proj, 'home_proj': h_proj,
-            'away_odds': a_odds, 'home_odds': h_odds,
-            'model_away_p': model_away_p, 'model_home_p': model_home_p,
-            'vegas_away_p': vegas_away_p, 'vegas_home_p': vegas_home_p,
-            'away_ev': away_ev, 'home_ev': home_ev
-        })
-
-    # Print Live Terminal Output Dashboard
+    # Console Presentation UI Terminal Block
     print("\n" + "="*75)
-    print(" 📊 LIVE PRODUCTION MLB BETTING MODEL ANALYSIS")
+    print(" 📊 SYSTEM DEPLOYMENT: MLB MODEL PROCESSING COMPLETED")
     print("="*75)
 
     print("\n🎯 TOP VALUE FAVORITES")
@@ -138,8 +139,8 @@ def run_mlb_live_sheet_model():
             print(f"• {g['home']} (Home) vs. {g['away']} [Line: {g['home_odds']}] | Edge: {g['home_ev']:+.2f}% EV")
             u_count += 1
     if u_count == 0:
-        print("  No current plus-money matchups present a calculated data discrepancy.")
+        print("  No current plus-money matchups present a calculated edge.")
     print("="*75)
 
 if __name__ == "__main__":
-    run_mlb_live_sheet_model()
+    run_flawless_mlb_model()
