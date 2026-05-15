@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
-import os
-from google import genai
+import requests
+import json
 
 # ============================================================
 # PAGE CONFIG
@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 # ============================================================
-# GOOGLE SHEET & AI CLIENT SETTINGS
+# GOOGLE SHEET SETTINGS
 # ============================================================
 
 SHEET_ID = "1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0"
@@ -25,18 +25,6 @@ EV_THRESHOLD = 5
 DIFF_THRESHOLD = 5
 HIGH_EV_THRESHOLD = 10
 
-# Initialize the GenAI Client safely using Streamlit's hidden vault or env vars
-@st.cache_resource
-def get_genai_client():
-    try:
-        api_key = st.secrets.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        if api_key:
-            return genai.Client(api_key=api_key)
-    except Exception:
-        pass
-    return None
-
-client = get_genai_client()
 
 # ============================================================
 # LOAD DATA
@@ -214,17 +202,20 @@ def color_board(row):
 
 
 # ============================================================
-# ADVANCED AI NARRATIVE ENGINE
+# RAW HTTP AI NARRATIVE ENGINE (No Library Installation Needed)
 # ============================================================
 
 @st.cache_data(show_spinner=False)
-def generate_ai_narrative(row_dict):
+def generate_ai_narrative(row_dict, api_key):
     """
-    Calls the unified Google GenAI client to compose an elegant, professional
-    matchup write-up tailored exactly to your quantitative models.
+    Runs a direct web request to get the detailed model analysis,
+    completely bypassing the broken google library installation requirements.
     """
-    if client is None:
+    if not api_key:
         return "_⚠️ AI Engine Note: Set up your `GOOGLE_API_KEY` in your `.streamlit/secrets.toml` to replace this template with an active real-time AI analytics breakdown._"
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    headers = {'Content-Type': 'application/json'}
 
     prompt = f"""
     You are an expert, numbers-driven sports betting quantitative analyst. 
@@ -242,12 +233,20 @@ def generate_ai_narrative(row_dict):
     
     Keep the tone direct, analytical, and highly metrics-focused. Do not repeat basic table data back to me. No filler.
     """
+    
+    payload = {
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }]
+    }
+
     try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
-        return response.text
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        if response.status_code == 200:
+            res_json = response.json()
+            return res_json['candidates'][0]['content']['parts'][0]['text']
+        else:
+            return f"_⚠️ AI Connection Issue (API Status {response.status_code})_"
     except Exception as e:
         return f"_❌ AI Briefing Timeout: {e}_"
 
@@ -256,7 +255,7 @@ def generate_ai_narrative(row_dict):
 # WRITEUPS
 # ============================================================
 
-def writeup(row):
+def writeup(row, api_key):
     if row["Model Pick"] == "PASS":
         return f"""
 ### {row['Away Team']} @ {row['Home Team']}
@@ -296,9 +295,9 @@ This is a skip unless you have outside matchup information that strongly changes
 
     dog_note = "underdog value play" if is_dog(odds) else "favorite value play"
 
-    # Convert the row into a serializable dictionary for clean caching
+    # Convert the row into a clean dictionary for reliable cross-process serialization
     row_dict = row.to_dict()
-    ai_narrative = generate_ai_narrative(row_dict)
+    ai_narrative = generate_ai_narrative(row_dict, api_key)
 
     return f"""
 ### {row['Away Team']} @ {row['Home Team']}
@@ -441,8 +440,11 @@ signals = model_plays[
 st.title("⚾ MLB Command Center")
 st.caption("Reading directly from APP_EXPORT")
 
-if client is None:
-    st.sidebar.warning("🤖 AI Engine Offline: To unlock custom automated narrative analysis, add your key to `.streamlit/secrets.toml`.")
+# Pull the API Key smoothly from your secrets file
+api_key = st.secrets.get("GOOGLE_API_KEY", "")
+
+if not api_key:
+    st.sidebar.warning("🤖 AI Engine Offline: Add your key to `.streamlit/secrets.toml` to see automated narratives.")
 
 c1, c2, c3, c4 = st.columns(4)
 
@@ -510,10 +512,9 @@ with tab5:
     if model_plays.empty:
         st.info("No model plays to write up.")
     else:
-        # Spinner only loads on first-run data generation to prevent UI stutter
         with st.spinner("AI Engine generating advanced matchup intelligence briefings..."):
             for _, row in model_plays.sort_values(by="Pick EV", ascending=False).iterrows():
-                st.markdown(writeup(row))
+                st.markdown(writeup(row, api_key))
                 st.divider()
 
 with tab6:
