@@ -6,3 +6,6 @@ lxml
 html5lib
 streamlit-autorefresh
 matplotlib
+io
+sys
+requests
