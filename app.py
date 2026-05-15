@@ -1,7 +1,5 @@
 import streamlit as st
 import pandas as pd
-import requests
-import json
 
 # ============================================================
 # PAGE CONFIG
@@ -202,60 +200,10 @@ def color_board(row):
 
 
 # ============================================================
-# RAW HTTP AI NARRATIVE ENGINE (No Library Installation Needed)
-# ============================================================
-
-@st.cache_data(show_spinner=False)
-def generate_ai_narrative(row_dict, api_key):
-    """
-    Runs a direct web request to get the detailed model analysis,
-    completely bypassing the broken google library installation requirements.
-    """
-    if not api_key:
-        return "_⚠️ AI Engine Note: Set up your `GOOGLE_API_KEY` in your `.streamlit/secrets.toml` to replace this template with an active real-time AI analytics breakdown._"
-
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-    headers = {'Content-Type': 'application/json'}
-
-    prompt = f"""
-    You are an expert, numbers-driven sports betting quantitative analyst. 
-    Analyze this single game row state from my custom MLB model and formulate a concise narrative summary:
-    
-    Matchup: {row_dict.get('Away Team')} @ {row_dict.get('Home Team')}
-    Model Pick: {row_dict.get('Model Pick')} ML ({row_dict.get('Pick Odds')})
-    Calculated Metrics: EV={row_dict.get('Pick EV')}, Variance Diff={row_dict.get('Pick Diff')}%, Model Win%={row_dict.get('My Win Away') if row_dict.get('Pick Side') == 'Away' else row_dict.get('My Win Home')}, Vegas Implied Win%={row_dict.get('Vegas Win Away') if row_dict.get('Pick Side') == 'Away' else row_dict.get('Vegas Win Home')}
-    Market Sentiment: Sharp Dog Status={row_dict.get('Sharp Dog')}, Market Context Summary={sharp_read(row_dict)}
-    
-    Write a 3-paragraph executive operational breakdown:
-    1. The Value Disconnect: Explain how our win probability completely beats out the public line or favorite juice.
-    2. Market Flow & Sharp Alignment: Provide a clear tactical read on if the institutional money (Sharp Dog/Sharp ML) is locking steps with our position or if it's a conflict spot.
-    3. Sizing Strategy: Offer a direct recommendation based on the data points.
-    
-    Keep the tone direct, analytical, and highly metrics-focused. Do not repeat basic table data back to me. No filler.
-    """
-    
-    payload = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }]
-    }
-
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
-        if response.status_code == 200:
-            res_json = response.json()
-            return res_json['candidates'][0]['content']['parts'][0]['text']
-        else:
-            return f"_⚠️ AI Connection Issue (API Status {response.status_code})_"
-    except Exception as e:
-        return f"_❌ AI Briefing Timeout: {e}_"
-
-
-# ============================================================
 # WRITEUPS
 # ============================================================
 
-def writeup(row, api_key):
+def writeup(row):
     if row["Model Pick"] == "PASS":
         return f"""
 ### {row['Away Team']} @ {row['Home Team']}
@@ -295,10 +243,6 @@ This is a skip unless you have outside matchup information that strongly changes
 
     dog_note = "underdog value play" if is_dog(odds) else "favorite value play"
 
-    # Convert the row into a clean dictionary for reliable cross-process serialization
-    row_dict = row.to_dict()
-    ai_narrative = generate_ai_narrative(row_dict, api_key)
-
     return f"""
 ### {row['Away Team']} @ {row['Home Team']}
 
@@ -321,16 +265,15 @@ This is a skip unless you have outside matchup information that strongly changes
 
 ---
 
-### Why This Is a Play (Model Assessment)
+### Why This Is a Play
 
 Your sheet is showing value on **{pick}** because that side clears your minimum requirements:
+
 - EV is above **{EV_THRESHOLD}**
 - Diff is at least **{DIFF_THRESHOLD}**
+- The opposing side does not grade better by your model
 
----
-
-### 🤖 Custom Model Narrative Analysis
-{ai_narrative}
+Against **{opponent}**, this is not just a “who wins” pick. It is a pricing play. Your numbers suggest the market is not fully accounting for the win probability your model gives to **{pick}**.
 
 ---
 
@@ -339,6 +282,9 @@ Your sheet is showing value on **{pick}** because that side clears your minimum 
 - Sharp Dog: **{sharp_dog if sharp_dog else "None"}**
 - Pick Sharp ML: **{sharp_ml}**
 - Read: **{sharp_read(row)}**
+
+If the sharp dog agrees with your model pick, confidence improves.  
+If the sharp dog conflicts with your model pick, this becomes a caution spot even if EV is positive.
 
 ---
 
@@ -440,12 +386,6 @@ signals = model_plays[
 st.title("⚾ MLB Command Center")
 st.caption("Reading directly from APP_EXPORT")
 
-# Pull the API Key smoothly from your secrets file
-api_key = st.secrets.get("GOOGLE_API_KEY", "")
-
-if not api_key:
-    st.sidebar.warning("🤖 AI Engine Offline: Add your key to `.streamlit/secrets.toml` to see automated narratives.")
-
 c1, c2, c3, c4 = st.columns(4)
 
 c1.metric("Games", len(df))
@@ -512,10 +452,9 @@ with tab5:
     if model_plays.empty:
         st.info("No model plays to write up.")
     else:
-        with st.spinner("AI Engine generating advanced matchup intelligence briefings..."):
-            for _, row in model_plays.sort_values(by="Pick EV", ascending=False).iterrows():
-                st.markdown(writeup(row, api_key))
-                st.divider()
+        for _, row in model_plays.sort_values(by="Pick EV", ascending=False).iterrows():
+            st.markdown(writeup(row))
+            st.divider()
 
 with tab6:
     st.subheader("Sharp Reads")
