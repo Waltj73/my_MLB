@@ -7,9 +7,9 @@ def quick_diagnostic_test():
     # --- STEP 1: PASTE A SAMPLE OF YOUR MATCHUPS TAB HERE ---
     # Highlight your headers and 2-3 rows in Google Sheets, copy them, 
     # and paste them exactly between the triple quotes below.
-    pasted_data = """Away	Home	Away Proj	Home Proj	Vegas Away	Vegas Home
-Team A	Team B	5.5	4.2	-130	+110
-Team C	Team D	3.8	6.1	+140	-160
+    pasted_data = """Game1		6:40 PM ET		Money	OU	Record	Profit	O-U-P	RF	RA	EST Score	EST Line		6:40 PM ET	Calc Win%
+Away	Philadelphia	Phillies	0	+114		21-23	$-966	22-20-2	4	4.7	3.8	8	PHI	0	43.55%
+Home	Pittsburgh	Pirates	0	-137	8	24-20	$-89	24-19-1	5	4.3	4.2	-122	PIT	0	56.45%
 """
 
     try:
