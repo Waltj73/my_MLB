@@ -8,8 +8,30 @@ from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
 
 st.set_page_config(
     page_title="MLB Command Center",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
+
+# Force a clean dark theme container for the Streamlit background
+st.markdown("""
+    <style>
+        .block-container { padding-top: 2rem; padding-bottom: 2rem; }
+        h1 { font-weight: 800 !important; color: #FFFFFF !important; letter-spacing: -1px; }
+        .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+        .stTabs [data-baseweb="tab"] {
+            background-color: #1e1e24;
+            border-radius: 6px 6px 0px 0px;
+            padding: 10px 20px;
+            color: #afb1b6;
+            font-weight: 600;
+        }
+        .stTabs [aria-selected="true"] {
+            background-color: #2d3139 !important;
+            color: #00ff66 !important;
+            border-bottom: 2px solid #00ff66 !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
 # ============================================================
 # GOOGLE SHEET SETTINGS
@@ -18,7 +40,6 @@ st.set_page_config(
 SHEET_ID = "1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0"
 SHEET_NAME = "APP_EXPORT"
 
-# skiprows=1 skips the top title/category row so the true columns match perfectly
 URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}&skiprows=1"
 
 EV_THRESHOLD = 5
@@ -33,7 +54,6 @@ DIFF_THRESHOLD = 5
 def load_data():
     try:
         df = pd.read_csv(URL)
-        # Strip trailing/leading spaces from the column headers
         df.columns = [str(c).strip() for c in df.columns]
         return df.fillna("")
     except Exception as e:
@@ -47,13 +67,7 @@ def load_data():
 
 def to_num(v):
     try:
-        return float(
-            str(v)
-            .replace("%", "")
-            .replace("+", "")
-            .replace(",", "")
-            .strip()
-        )
+        return float(str(v).replace("%", "").replace("+", "").replace(",", "").strip())
     except Exception:
         return 0.0
 
@@ -89,47 +103,26 @@ def grade_play(ev, diff):
     ev = to_num(ev)
     diff = to_num(diff)
 
-    if ev >= 20 and diff >= 10:
-        return "Strong Play"
-    if ev >= 10 and diff >= 5:
-        return "Playable"
-    if ev > 5:
-        return "Lean"
-
+    if ev >= 20 and diff >= 10: return "Strong Play"
+    if ev >= 10 and diff >= 5: return "Playable"
+    if ev > 5: return "Lean"
     return "Pass"
 
 
 def prepare_display(df):
     cols = [
-        "Away Team",
-        "Home Team",
-        "Away Odds",
-        "Home Odds",
-        "Sharp Away",
-        "Sharp Home",
-        "Sharp Dog",
-        "Vegas Win Away",
-        "Vegas Win Home",
-        "My Win Away",
-        "My Win Home",
-        "Diff Away",
-        "Diff Home",
-        "EV Away",
-        "EV Home",
-        "Model Pick",
-        "Pick Side",
-        "Pick Odds",
-        "Pick EV",
-        "Pick Diff",
-        "Grade",
+        "Away Team", "Home Team", "Away Odds", "Home Odds", "Sharp Away",
+        "Sharp Home", "Sharp Dog", "Vegas Win Away", "Vegas Win Home",
+        "My Win Away", "My Win Home", "Diff Away", "Diff Home", "EV Away",
+        "EV Home", "Model Pick", "Pick Side", "Pick Odds", "Pick EV",
+        "Pick Diff", "Grade",
     ]
-
     cols = [c for c in cols if c in df.columns]
     return df[cols].copy()
 
 
 # ============================================================
-# AGGRID TABLE WITH COLOR CODING
+# MODERNIZED DARK AGGRID BOARD
 # ============================================================
 
 def show_grid(df, height=825):
@@ -137,43 +130,39 @@ def show_grid(df, height=825):
 
     gb = GridOptionsBuilder.from_dataframe(display_df)
 
+    # Global UI Overhaul
     gb.configure_default_column(
         resizable=True,
         sortable=True,
         filter=True,
-        minWidth=110,
+        minWidth=120,
         wrapText=False,
         autoHeight=False,
     )
 
-    # ----------------------------
-    # PINNED COLUMNS
-    # ----------------------------
+    # Layout Spacing Controls
+    gb.configure_grid_options(
+        rowHeight=42,
+        headerHeight=48,
+        rowSelection="single"
+    )
 
+    # Pinned Navigation Pillars
     if "Away Team" in display_df.columns:
-        gb.configure_column("Away Team", pinned="left", width=130)
+        gb.configure_column("Away Team", pinned="left", width=140, cellStyle={"fontWeight": "700", "color": "#FFFFFF"})
 
     if "Home Team" in display_df.columns:
-        gb.configure_column("Home Team", pinned="left", width=130)
+        gb.configure_column("Home Team", pinned="left", width=140, cellStyle={"fontWeight": "700", "color": "#FFFFFF"})
 
-    if "Model Pick" in display_df.columns:
-        gb.configure_column("Model Pick", pinned="right", width=140)
-
-    if "Grade" in display_df.columns:
-        gb.configure_column("Grade", pinned="right", width=120)
-
-    # ----------------------------
-    # COLOR STYLES
-    # ----------------------------
-
+    # Pro-Grade Dark Color Mappings (Glow effects rather than flat solids)
     ev_style = JsCode("""
     function(params) {
         let val = parseFloat(String(params.value).replace('%','').trim());
         if (isNaN(val)) return {};
-        if (val >= 20) return {backgroundColor: '#00a651', color: 'white', fontWeight: 'bold'};
-        if (val >= 10) return {backgroundColor: '#7DCEA0', color: 'black', fontWeight: 'bold'};
-        if (val > 0) return {backgroundColor: '#D5F5E3', color: 'black'};
-        if (val < 0) return {backgroundColor: '#F5B7B1', color: 'black'};
+        if (val >= 20) return {backgroundColor: 'rgba(0, 166, 81, 0.25)', color: '#00ff66', fontWeight: 'bold'};
+        if (val >= 10) return {backgroundColor: 'rgba(125, 206, 160, 0.15)', color: '#7DCEA0'};
+        if (val > 0) return {backgroundColor: 'rgba(213, 245, 227, 0.05)', color: '#D5F5E3'};
+        if (val < 0) return {backgroundColor: 'rgba(245, 183, 177, 0.08)', color: '#F5B7B1'};
         return {};
     }
     """)
@@ -182,17 +171,17 @@ def show_grid(df, height=825):
     function(params) {
         let val = parseFloat(String(params.value).replace('%','').trim());
         if (isNaN(val)) return {};
-        if (val >= 10) return {backgroundColor: '#58D68D', color: 'white', fontWeight: 'bold'};
-        if (val >= 5) return {backgroundColor: '#F9E79F', color: 'black', fontWeight: 'bold'};
-        if (val <= -10) return {backgroundColor: '#F1948A', color: 'black'};
+        if (val >= 10) return {backgroundColor: 'rgba(88, 214, 141, 0.25)', color: '#58D68D', fontWeight: 'bold'};
+        if (val >= 5) return {backgroundColor: 'rgba(249, 231, 159, 0.15)', color: '#F9E79F', fontWeight: 'bold'};
+        if (val <= -10) return {backgroundColor: 'rgba(241, 148, 138, 0.12)', color: '#F1948A'};
         return {};
     }
     """)
 
     pick_style = JsCode("""
     function(params) {
-        if (params.value === 'PASS') return {backgroundColor: '#EEEEEE', color: '#666666'};
-        if (params.value) return {backgroundColor: '#1E8449', color: 'white', fontWeight: 'bold'};
+        if (params.value === 'PASS') return {backgroundColor: 'rgba(255,255,255,0.04)', color: '#71747c'};
+        if (params.value) return {backgroundColor: '#1E8449', color: '#ffffff', fontWeight: '900', textAlign: 'center'};
         return {};
     }
     """)
@@ -200,7 +189,7 @@ def show_grid(df, height=825):
     sharp_style = JsCode("""
     function(params) {
         if (params.value && String(params.value).trim() !== '') {
-            return {backgroundColor: '#D6EAF8', color: '#154360', fontWeight: 'bold'};
+            return {backgroundColor: 'rgba(52, 152, 219, 0.2)', color: '#5dade2', fontWeight: 'bold', border: '1px solid #3498db'};
         }
         return {};
     }
@@ -208,10 +197,10 @@ def show_grid(df, height=825):
 
     grade_style = JsCode("""
     function(params) {
-        if (params.value === 'Strong Play') return {backgroundColor: '#00a651', color: 'white', fontWeight: 'bold'};
-        if (params.value === 'Playable') return {backgroundColor: '#A9DFBF', color: 'black', fontWeight: 'bold'};
-        if (params.value === 'Lean') return {backgroundColor: '#FCF3CF', color: 'black', fontWeight: 'bold'};
-        if (params.value === 'Pass') return {backgroundColor: '#EEEEEE', color: '#666666'};
+        if (params.value === 'Strong Play') return {color: '#00ff66', fontWeight: '900', backgroundColor: 'rgba(0, 166, 81, 0.1)'};
+        if (params.value === 'Playable') return {color: '#7DCEA0', fontWeight: 'bold'};
+        if (params.value === 'Lean') return {color: '#F9E79F'};
+        if (params.value === 'Pass') return {color: '#71747c'};
         return {};
     }
     """)
@@ -220,8 +209,8 @@ def show_grid(df, height=825):
     function(params) {
         let val = parseFloat(String(params.value).replace('+','').trim());
         if (isNaN(val)) return {};
-        if (val > 0) return {backgroundColor: '#EBF5FB', color: '#154360', fontWeight: 'bold'};
-        if (val < 0) return {backgroundColor: '#FDEDEC', color: '#922B21', fontWeight: 'bold'};
+        if (val > 0) return {color: '#3498db', fontWeight: 'bold', backgroundColor: 'rgba(52, 152, 219, 0.05)'};
+        if (val < 0) return {color: '#e74c3c', fontWeight: 'bold', backgroundColor: 'rgba(231, 76, 60, 0.05)'};
         return {};
     }
     """)
@@ -231,40 +220,28 @@ def show_grid(df, height=825):
         let pick = params.data["Model Pick"];
         let sharp = params.data["Sharp Dog"];
         if (pick && sharp && pick !== "PASS" && String(pick).trim().toUpperCase() === String(sharp).trim().toUpperCase()) {
-            return {backgroundColor: '#EEF7FF'};
+            return {backgroundColor: '#1c2833', borderLeft: '4px solid #3498db'};
         }
         return {};
     }
     """)
 
-    # ----------------------------
-    # APPLY COLUMN STYLES
-    # ----------------------------
-
+    # Apply style assignments
     for col in ["EV Away", "EV Home", "Pick EV"]:
-        if col in display_df.columns:
-            gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=ev_style)
+        if col in display_df.columns: gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=ev_style)
 
     for col in ["Diff Away", "Diff Home", "Pick Diff"]:
-        if col in display_df.columns:
-            gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=diff_style)
+        if col in display_df.columns: gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=diff_style)
 
     for col in ["Away Odds", "Home Odds", "Pick Odds"]:
-        if col in display_df.columns:
-            gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=odds_style)
+        if col in display_df.columns: gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=odds_style)
 
-    if "Sharp Dog" in display_df.columns:
-        gb.configure_column("Sharp Dog", width=125, cellStyle=sharp_style)
-
-    if "Model Pick" in display_df.columns:
-        gb.configure_column("Model Pick", pinned="right", width=140, cellStyle=pick_style)
-
-    if "Grade" in display_df.columns:
-        gb.configure_column("Grade", pinned="right", width=120, cellStyle=grade_style)
+    if "Sharp Dog" in display_df.columns: gb.configure_column("Sharp Dog", width=125, cellStyle=sharp_style)
+    if "Model Pick" in display_df.columns: gb.configure_column("Model Pick", pinned="right", width=140, cellStyle=pick_style)
+    if "Grade" in display_df.columns: gb.configure_column("Grade", pinned="right", width=120, cellStyle=grade_style)
 
     for col in ["Sharp Away", "Sharp Home", "Vegas Win Away", "Vegas Win Home", "My Win Away", "My Win Home"]:
-        if col in display_df.columns:
-            gb.configure_column(col, width=125)
+        if col in display_df.columns: gb.configure_column(col, width=125, cellStyle={"color": "#cccccc"})
 
     grid_options = gb.build()
     grid_options["getRowStyle"] = signal_row_style
@@ -275,7 +252,7 @@ def show_grid(df, height=825):
         height=height,
         fit_columns_on_grid_load=False,
         allow_unsafe_jscode=True,
-        theme="balham",
+        theme="alpine-dark",  # Clean, modern charcoal/black framework
         enable_enterprise_modules=False,
     )
 
@@ -285,37 +262,19 @@ def show_grid(df, height=825):
 # ============================================================
 
 df = load_data()
-
-if df.empty:
-    st.stop()
+if df.empty: st.stop()
 
 required_cols = [
-    "Away Team",
-    "Home Team",
-    "Away Odds",
-    "Home Odds",
-    "Sharp Away",
-    "Sharp Home",
-    "Sharp Dog",
-    "Vegas Win Away",
-    "Vegas Win Home",
-    "My Win Away",
-    "My Win Home",
-    "Diff Away",
-    "Diff Home",
-    "EV Away",
-    "EV Home",
+    "Away Team", "Home Team", "Away Odds", "Home Odds", "Sharp Away",
+    "Sharp Home", "Sharp Dog", "Vegas Win Away", "Vegas Win Home",
+    "My Win Away", "My Win Home", "Diff Away", "Diff Home", "EV Away", "EV Home"
 ]
 
 missing = [c for c in required_cols if c not in df.columns]
-
 if missing:
     st.error(f"Missing columns in APP_EXPORT: {missing}")
-    st.write("Detected columns:")
-    st.write(list(df.columns))
     st.stop()
 
-# Clean out any empty rows below the true data payload
 df = df[df["Away Team"].astype(str).str.strip() != ""].copy().reset_index(drop=True)
 
 
@@ -324,17 +283,13 @@ df = df[df["Away Team"].astype(str).str.strip() != ""].copy().reset_index(drop=T
 # ============================================================
 
 picks = df.apply(get_pick, axis=1)
-
 df["Model Pick"] = [p[0] for p in picks]
 df["Pick Side"] = [p[1] for p in picks]
 df["Pick EV"] = [p[2] for p in picks]
 df["Pick Diff"] = [p[3] for p in picks]
 df["Pick Odds"] = [p[4] for p in picks]
 
-df["Grade"] = df.apply(
-    lambda r: grade_play(r["Pick EV"], r["Pick Diff"]),
-    axis=1
-)
+df["Grade"] = df.apply(lambda r: grade_play(r["Pick EV"], r["Pick Diff"]), axis=1)
 
 
 # ============================================================
@@ -376,27 +331,21 @@ if not model_plays.empty:
 st.title("⚾ MLB Command Center")
 st.caption("Spreadsheet-style betting board powered by APP_EXPORT")
 
+# Metric Panel Styles
 c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Games On Board", len(df))
+c2.metric("Active Model Plays", len(model_plays))
+c3.metric("Tracked Sharp Dogs", len(sharp_dogs))
+c4.metric("Model Underdogs", len(model_dogs))
+c5.metric("System Confluence Signals", len(signals))
 
-c1.metric("Games", len(df))
-c2.metric("Model Plays", len(model_plays))
-c3.metric("Sharp Dogs", len(sharp_dogs))
-c4.metric("Model Dogs", len(model_dogs))
-c5.metric("Signal Plays", len(signals))
-
-# "How to Read" added as the first master tab entry
+# Master Tabs Layout
 tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📖 How to Read",
-    "All Games",
-    "Top 5 Plays",
-    "Sharp Dogs",
-    "Model Dogs",
-    "Signal Plays"
+    "📖 How to Read", "All Games", "Top 5 Plays", "Sharp Dogs", "Model Dogs", "Signal Plays"
 ])
 
 with tab0:
     st.subheader("System Rules & Interpretation Playbook")
-    
     col_left, col_right = st.columns(2)
     
     with col_left:
@@ -406,62 +355,47 @@ with tab0:
         * **Expected Value (EV):** Must be strictly greater than **5.0** (`EV > 5`).
         * **Win Percentage Differential (Diff):** Must be equal to or greater than **5.0** (`Diff >= 5`).
         
-        *If both teams fail these criteria, or if both values sit below the thresholds, the system automatically markers the row as a **PASS**.*
-        
         ### 📊 Play Tier Grading
         When a play is identified, its strength is categorized dynamically according to the final **Pick EV** and **Pick Diff** values:
-        * 🟢 **Strong Play:** EV $\ge$ 20 AND Diff $\ge$ 10. (Highest system validation)
-        * 🟡 **Playable:** EV $\ge$ 10 AND Diff $\ge$ 5. (Standard active target)
-        * 🔵 **Lean:** EV $>$ 5 AND Diff $\ge$ 5 (but fails to reach Playable marks).
-        * ⚪ **Pass:** Fails to meet baseline limits or calculations map out negative value.
+        * 🟢 **Strong Play:** EV $\ge$ 20 AND Diff $\ge$ 10.
+        * 🟡 **Playable:** EV $\ge$ 10 AND Diff $\ge$ 5.
+        * 🔵 **Lean:** EV $>$ 5 AND Diff $\ge$ 5.
+        * ⚪ **Pass:** Fails to meet baseline limits.
         """)
         
     with col_right:
         st.markdown("""
         ### 🔍 Reading the Market Segments
-        
         #### 📉 Favorites vs. 🐶 Underdogs
         The application isolates the line pricing based on standard American odds notations:
-        * **Favorites (Minus Money):** Displayed with negative values (e.g., `-144`). These represent positions where the market implied probability is high.
-        * **Underdogs (Plus Money / Dogs):** Isolated via the **Model Dogs** tracking layer whenever `Odds > 0` (e.g., `+124`). The system flags these as high-leverage opportunities where the model finds pricing inefficiencies on plus-money returns.
+        * **Favorites (Minus Money):** Displayed with negative red-tinted values. High market probability hooks.
+        * **Underdogs (Plus Money / Dogs):** Isolated via the **Model Dogs** tracking layer whenever `Odds > 0`. High-leverage inefficiency models.
         
         #### 📈 Sharp Action & Convergence Signals
-        * **Sharp Tracking:** The board monitors incoming market direction (`Sharp Away`, `Sharp Home`, and explicitly isolated `Sharp Dog` callouts) to denote where professional trading syndicates are exposing risk.
-        * **Convergence Signals:** Found in the **Signal Plays** panel. This track triggers exclusively when the **Model Pick** cleanly converges with the designated **Sharp Dog** selection. When these systems align on an underdog position, the rows highlight in **soft blue** across the data panels indicating systemic confluence.
+        * **Sharp Tracking:** Denotes where professional trading syndicates are exposing risk capital.
+        * **Convergence Signals:** Found in the **Signal Plays** panel. Triggers when the **Model Pick** cleanly matches the designated **Sharp Dog**. These custom rows highlight inside the grid to track systemic alignment.
         """)
 
 with tab1:
-    st.subheader("All Games")
+    st.subheader("All Boarded Formations")
     show_grid(df, height=850)
 
 with tab2:
-    st.subheader("Top 5 Model Plays")
-
-    if top_plays.empty:
-        st.info("No model plays found.")
-    else:
-        show_grid(top_plays, height=500)
+    st.subheader("Top 5 Premium System Plays")
+    if top_plays.empty: st.info("No active model plays found.")
+    else: show_grid(top_plays, height=500)
 
 with tab3:
-    st.subheader("Sharp Dogs Listed In Sheet")
-
-    if sharp_dogs.empty:
-        st.info("No sharp dogs listed.")
-    else:
-        show_grid(sharp_dogs, height=850)
+    st.subheader("Sharp Syndicate Underdog Targets")
+    if sharp_dogs.empty: st.info("No sharp dogs listed.")
+    else: show_grid(sharp_dogs, height=850)
 
 with tab4:
-    st.subheader("Model Underdog Plays")
-
-    if model_dogs.empty:
-        st.info("No model underdog plays found.")
-    else:
-        show_grid(model_dogs, height=850)
+    st.subheader("Model Edge Underdog Formations")
+    if model_dogs.empty: st.info("No model underdog plays found.")
+    else: show_grid(model_dogs, height=850)
 
 with tab5:
-    st.subheader("Signal Plays")
-
-    if signals.empty:
-        st.info("No sharp/model alignment plays found.")
-    else:
-        show_grid(signals, height=850)
+    st.subheader("System Confluence (Model & Sharp Alignment)")
+    if signals.empty: st.info("No sharp/model alignment plays found.")
+    else: show_grid(signals, height=850)
