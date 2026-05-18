@@ -381,7 +381,7 @@ with tab0:
 
 with tab1:
     st.subheader("All Boarded Formations")
-    show_grid(df, height=850)
+    show_grid(df, height=800)
 
 with tab2:
     st.subheader("Top 5 Premium System Plays")
