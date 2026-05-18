@@ -384,7 +384,9 @@ c3.metric("Sharp Dogs", len(sharp_dogs))
 c4.metric("Model Dogs", len(model_dogs))
 c5.metric("Signal Plays", len(signals))
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+# "How to Read" added as the first master tab entry
+tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📖 How to Read",
     "All Games",
     "Top 5 Plays",
     "Sharp Dogs",
@@ -392,12 +394,49 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Signal Plays"
 ])
 
+with tab0:
+    st.subheader("System Rules & Interpretation Playbook")
+    
+    col_left, col_right = st.columns(2)
+    
+    with col_left:
+        st.markdown("""
+        ### 🎯 Core Execution Thresholds
+        The model checks specific edge benchmarks for both `Away` and `Home` columns to calculate valid selections. A team is strictly targeted **only** if it ticks both parameters simultaneously:
+        * **Expected Value (EV):** Must be strictly greater than **5.0** (`EV > 5`).
+        * **Win Percentage Differential (Diff):** Must be equal to or greater than **5.0** (`Diff >= 5`).
+        
+        *If both teams fail these criteria, or if both values sit below the thresholds, the system automatically markers the row as a **PASS**.*
+        
+        ### 📊 Play Tier Grading
+        When a play is identified, its strength is categorized dynamically according to the final **Pick EV** and **Pick Diff** values:
+        * 🟢 **Strong Play:** EV $\ge$ 20 AND Diff $\ge$ 10. (Highest system validation)
+        * 🟡 **Playable:** EV $\ge$ 10 AND Diff $\ge$ 5. (Standard active target)
+        * 🔵 **Lean:** EV $>$ 5 AND Diff $\ge$ 5 (but fails to reach Playable marks).
+        * ⚪ **Pass:** Fails to meet baseline limits or calculations map out negative value.
+        """)
+        
+    with col_right:
+        st.markdown("""
+        ### 🔍 Reading the Market Segments
+        
+        #### 📉 Favorites vs. 🐶 Underdogs
+        The application isolates the line pricing based on standard American odds notations:
+        * **Favorites (Minus Money):** Displayed with negative values (e.g., `-144`). These represent positions where the market implied probability is high.
+        * **Underdogs (Plus Money / Dogs):** Isolated via the **Model Dogs** tracking layer whenever `Odds > 0` (e.g., `+124`). The system flags these as high-leverage opportunities where the model finds pricing inefficiencies on plus-money returns.
+        
+        #### 📈 Sharp Action & Convergence Signals
+        * **Sharp Tracking:** The board monitors incoming market direction (`Sharp Away`, `Sharp Home`, and explicitly isolated `Sharp Dog` callouts) to denote where professional trading syndicates are exposing risk.
+        * **Convergence Signals:** Found in the **Signal Plays** panel. This track triggers exclusively when the **Model Pick** cleanly converges with the designated **Sharp Dog** selection. When these systems align on an underdog position, the rows highlight in **soft blue** across the data panels indicating systemic confluence.
+        """)
+
 with tab1:
     st.subheader("All Games")
     show_grid(df, height=850)
 
 with tab2:
     st.subheader("Top 5 Model Plays")
+
     if top_plays.empty:
         st.info("No model plays found.")
     else:
@@ -405,6 +444,7 @@ with tab2:
 
 with tab3:
     st.subheader("Sharp Dogs Listed In Sheet")
+
     if sharp_dogs.empty:
         st.info("No sharp dogs listed.")
     else:
@@ -412,6 +452,7 @@ with tab3:
 
 with tab4:
     st.subheader("Model Underdog Plays")
+
     if model_dogs.empty:
         st.info("No model underdog plays found.")
     else:
@@ -419,6 +460,7 @@ with tab4:
 
 with tab5:
     st.subheader("Signal Plays")
+
     if signals.empty:
         st.info("No sharp/model alignment plays found.")
     else:
