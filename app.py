@@ -3,396 +3,347 @@ import pandas as pd
 from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
 
 # ============================================================
-# PAGE CONFIG
+# PRODUCTION PAGE CONFIG
 # ============================================================
-
 st.set_page_config(
-    page_title="MLB Command Center",
+    page_title="MLB Quantitative Command Center",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
-# Force high-contrast structural text rules globally across the app container
+# Elite Dark/High-Contrast UI Styling Injection
 st.markdown("""
     <style>
-        .block-container { padding-top: 2rem; padding-bottom: 2rem; }
-        h1 { font-weight: 800 !important; color: #111111 !important; letter-spacing: -1px; }
-        .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+        .block-container { padding-top: 1.5rem; padding-bottom: 1.5rem; }
+        h1 { font-weight: 900 !important; color: #111111 !important; letter-spacing: -1.5px; }
+        h3 { font-weight: 700 !important; color: #2C3E50 !important; }
+        
+        /* Metric Block Custom Styling */
+        div[data-testid="stMetricValue"] { font-size: 24px !important; font-weight: 800 !important; color: #1E8449 !important; }
+        
+        /* Modern Tab Navigation Layout */
+        .stTabs [data-baseweb="tab-list"] { gap: 12px; }
         .stTabs [data-baseweb="tab"] {
-            background-color: #f0f2f6;
+            background-color: #F8F9F9;
+            border: 1px solid #E5E7E9;
             border-radius: 6px 6px 0px 0px;
-            padding: 10px 20px;
-            color: #444444;
-            font-weight: 600;
+            padding: 12px 24px;
+            color: #5D6D7E;
+            font-weight: 700;
+            transition: all 0.2s ease-in-out;
         }
         .stTabs [aria-selected="true"] {
-            background-color: #ffffff !important;
-            color: #1e8449 !important;
-            border-bottom: 2px solid #1e8449 !important;
+            background-color: #FFFFFF !important;
+            color: #1E8449 !important;
+            border-top: 3px solid #1E8449 !important;
+            border-bottom: 1px solid #FFFFFF !important;
+            box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.05);
+        }
+        
+        /* Dynamic Monitor Panel */
+        .monitor-card {
+            background-color: #F2F4F4;
+            border-left: 5px solid #2980B9;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 20px;
         }
     </style>
 """, unsafe_allow_html=True)
 
-# ============================================================
-# GOOGLE SHEET SETTINGS
-# ============================================================
 
+# ============================================================
+# LIVE PARAMETER CONFIGURATION (SIDEBAR CONTROL KNOBS)
+# ============================================================
+st.sidebar.markdown("## ⚙️ Quantitative Control Knobs")
+st.sidebar.markdown("Adjust systematic thresholds in real-time to filter market inefficiencies.")
+
+EV_THRESHOLD = st.sidebar.slider("Minimum Expected Value (EV)", min_value=0.0, max_value=25.0, value=5.0, step=0.5)
+DIFF_THRESHOLD = st.sidebar.slider("Minimum Probability Delta (Diff %)", min_value=0.0, max_value=20.0, value=5.0, step=0.5)
+
+st.sidebar.write("---")
+st.sidebar.markdown("### 📊 Market Exposure Rules")
+st.sidebar.info(
+    f"Current Settings requiring **EV > {EV_THRESHOLD}** AND **Diff ≥ {DIFF_THRESHOLD}%** to trigger an automated system execution side."
+)
+
+
+# ============================================================
+# PIPELINE: DATA INGESTION & ROBUST PARSING
+# ============================================================
 SHEET_ID = "1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0"
 SHEET_NAME = "APP_EXPORT"
-
 URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}&skiprows=1"
 
-EV_THRESHOLD = 5
-DIFF_THRESHOLD = 5
-
-
-# ============================================================
-# LOAD DATA
-# ============================================================
-
-@st.cache_data(ttl=30)
-def load_data():
+@st.cache_data(ttl=15) # Optimized aggressive cache refresh cycle
+def load_and_sanitize_market_data():
     try:
-        df = pd.read_csv(URL)
-        df.columns = [str(c).strip() for c in df.columns]
-        return df.fillna("")
+        raw_df = pd.read_csv(URL)
+        raw_df.columns = [str(c).strip() for c in raw_df.columns]
+        return raw_df.fillna("")
     except Exception as e:
-        st.error(f"Sync Error: {e}")
+        st.error(f"⚠️ Critical Pipeline Sync Fault: {e}")
         return pd.DataFrame()
 
-
-# ============================================================
-# HELPERS
-# ============================================================
-
-def to_num(v):
+def clean_numerical_vector(val):
     try:
-        return float(str(v).replace("%", "").replace("+", "").replace(",", "").strip())
-    except Exception:
+        return float(str(val).replace("%", "").replace("+", "").replace(",", "").strip())
+    except ValueError:
         return 0.0
 
+def evaluate_tactical_side(row, ev_limit, diff_limit):
+    away_ev = clean_numerical_vector(row.get("EV Away", 0))
+    home_ev = clean_numerical_vector(row.get("EV Home", 0))
+    away_diff = clean_numerical_vector(row.get("Diff Away", 0))
+    home_diff = clean_numerical_vector(row.get("Diff Home", 0))
 
-def normalize(v):
-    return str(v).strip().upper()
+    away_valid = away_ev > ev_limit and away_diff >= diff_limit
+    home_valid = home_ev > ev_limit and home_diff >= diff_limit
 
-
-def is_dog(odds):
-    return to_num(odds) > 0
-
-
-def get_pick(row):
-    away_ev = to_num(row["EV Away"])
-    home_ev = to_num(row["EV Home"])
-
-    away_diff = to_num(row["Diff Away"])
-    home_diff = to_num(row["Diff Home"])
-
-    away_play = away_ev > EV_THRESHOLD and away_diff >= DIFF_THRESHOLD
-    home_play = home_ev > EV_THRESHOLD and home_diff >= DIFF_THRESHOLD
-
-    if away_play and (away_ev >= home_ev or not home_play):
-        return row["Away Team"], "Away", away_ev, away_diff, row["Away Odds"]
-
-    if home_play and (home_ev > away_ev or not away_play):
-        return row["Home Team"], "Home", home_ev, home_diff, row["Home Odds"]
-
-    return "PASS", "Pass", max(away_ev, home_ev), max(away_diff, home_diff), ""
+    if away_valid and (away_ev >= home_ev or not home_valid):
+        return pd.Series([row["Away Team"], "Away", away_ev, away_diff, row["Away Odds"]])
+    if home_valid and (home_ev > away_ev or not away_valid):
+        return pd.Series([row["Home Team"], "Home", home_ev, home_diff, row["Home Odds"]])
+    
+    return pd.Series(["PASS", "Pass", max(away_ev, home_ev), max(away_diff, home_diff), ""])
 
 
-def grade_play(ev, diff):
-    ev = to_num(ev)
-    diff = to_num(diff)
+# ============================================================
+# CONSOLE STATE ENGINE (ROW CLICKS INITIALIZATION)
+# ============================================================
+if "selected_matchup_key" not in st.session_state:
+    st.session_state["selected_matchup_key"] = None
 
+
+# ============================================================
+# COMPILING WORKSPACE DATASETS
+# ============================================================
+base_df = load_and_sanitize_market_data()
+if base_df.empty: st.stop()
+
+# Ensure critical nodes exist before parsing matrix
+required_nodes = ["Away Team", "Home Team", "Away Odds", "Home Odds", "EV Away", "EV Home", "Diff Away", "Diff Home"]
+missing_nodes = [n for n in required_nodes if n not in base_df.columns]
+if missing_nodes:
+    st.error(f"❌ Aborting. Data node signature layout altered: Missing {missing_nodes}")
+    st.stop()
+
+# Strip metadata rows safely
+base_df = base_df[base_df["Away Team"].astype(str).str.strip() != ""].copy().reset_index(drop=True)
+
+# Run Vectorized Engine Mapping dynamically factoring in User's Sidebar Control Knobs
+base_df[["Model Pick", "Pick Side", "Pick EV", "Pick Diff", "Pick Odds"]] = base_df.apply(
+    lambda r: evaluate_tactical_side(r, EV_THRESHOLD, DIFF_THRESHOLD), axis=1
+)
+
+# Apply Tier Grades on the fly
+def assign_tier_grade(row):
+    ev = row["Pick EV"]
+    diff = row["Pick Diff"]
     if ev >= 20 and diff >= 10: return "Strong Play"
     if ev >= 10 and diff >= 5: return "Playable"
     if ev > 5: return "Lean"
     return "Pass"
 
+base_df["Grade"] = base_df.apply(assign_tier_grade, axis=1)
 
-def prepare_display(df):
-    cols = [
+
+# ============================================================
+# HIGH-PERFORMANCE GRID COMPILER ENGINE
+# ============================================================
+def compile_interactive_grid(target_df, grid_height=450):
+    display_cols = [
         "Away Team", "Home Team", "Away Odds", "Home Odds", "Sharp Away",
         "Sharp Home", "Sharp Dog", "Vegas Win Away", "Vegas Win Home",
         "My Win Away", "My Win Home", "Diff Away", "Diff Home", "EV Away",
         "EV Home", "Model Pick", "Pick Side", "Pick Odds", "Pick EV",
-        "Pick Diff", "Grade",
+        "Pick Diff", "Grade"
     ]
-    cols = [c for c in cols if c in df.columns]
-    return df[cols].copy()
+    valid_cols = [c for c in display_cols if c in target_df.columns]
+    working_df = target_df[valid_cols].copy()
 
+    gb = GridOptionsBuilder.from_dataframe(working_df)
+    gb.configure_default_column(resizable=True, sortable=True, filter=True, minWidth=115)
+    gb.configure_grid_options(rowHeight=38, headerHeight=42, rowSelection="single")
 
-# ============================================================
-# HIGH-CONTRAST AGGRID APP BOARD
-# ============================================================
-
-def show_grid(df, height=825):
-    display_df = prepare_display(df)
-
-    gb = GridOptionsBuilder.from_dataframe(display_df)
-
-    gb.configure_default_column(
-        resizable=True,
-        sortable=True,
-        filter=True,
-        minWidth=120,
-        wrapText=False,
-        autoHeight=False,
-    )
-
-    gb.configure_grid_options(
-        rowHeight=42,
-        headerHeight=48,
-        rowSelection="single"
-    )
-
-    base_text_style = {"color": "#111111", "fontWeight": "600"}
-    team_text_style = {"color": "#111111", "fontWeight": "800"}
-
-    if "Away Team" in display_df.columns:
-        gb.configure_column("Away Team", pinned="left", width=140, cellStyle=team_text_style)
-
-    if "Home Team" in display_df.columns:
-        gb.configure_column("Home Team", pinned="left", width=140, cellStyle=team_text_style)
-
-    ev_style = JsCode("""
-    function(params) {
-        let val = parseFloat(String(params.value).replace('%','').trim());
-        if (isNaN(val)) return {color: '#111111'};
-        if (val >= 20) return {backgroundColor: '#00a651', color: '#ffffff', fontWeight: 'bold'};
-        if (val >= 10) return {backgroundColor: '#7DCEA0', color: '#111111', fontWeight: 'bold'};
-        if (val > 0) return {backgroundColor: '#D5F5E3', color: '#111111'};
-        if (val < 0) return {backgroundColor: '#F5B7B1', color: '#111111'};
-        return {color: '#111111'};
-    }
-    """)
-
-    diff_style = JsCode("""
-    function(params) {
-        let val = parseFloat(String(params.value).replace('%','').trim());
-        if (isNaN(val)) return {color: '#111111'};
-        if (val >= 10) return {backgroundColor: '#58D68D', color: '#ffffff', fontWeight: 'bold'};
-        if (val >= 5) return {backgroundColor: '#F9E79F', color: '#111111', fontWeight: 'bold'};
-        if (val <= -10) return {backgroundColor: '#F1948A', color: '#111111'};
-        return {color: '#111111'};
-    }
-    """)
-
-    pick_style = JsCode("""
-    function(params) {
-        if (params.value === 'PASS') return {backgroundColor: '#EEEEEE', color: '#666666'};
-        if (params.value) return {backgroundColor: '#1E8449', color: '#ffffff', fontWeight: '900', textAlign: 'center'};
-        return {color: '#111111'};
-    }
-    """)
-
-    sharp_style = JsCode("""
-    function(params) {
-        if (params.value && String(params.value).trim() !== '') {
-            return {backgroundColor: '#D6EAF8', color: '#154360', fontWeight: 'bold'};
+    # Static Fixed Pins
+    gb.configure_column("Away Team", pinned="left", width=130, cellStyle={"fontWeight": "800", "color": "#111111"})
+    gb.configure_column("Home Team", pinned="left", width=130, cellStyle={"fontWeight": "800", "color": "#111111"})
+    gb.configure_column("Model Pick", pinned="right", width=130, cellStyle=JsCode("""
+        function(p) { return p.value === 'PASS' ? {backgroundColor: '#EBEDEF', color: '#7F8C8D'} : {backgroundColor: '#27AE60', color: '#ffffff', fontWeight: '900', textAlign: 'center'}; }
+    """))
+    gb.configure_column("Grade", pinned="right", width=115, cellStyle=JsCode("""
+        function(p) {
+            if (p.value === 'Strong Play') return {backgroundColor: '#1E8449', color: '#ffffff', fontWeight: 'bold'};
+            if (p.value === 'Playable') return {backgroundColor: '#2ECC71', color: '#111111'};
+            if (p.value === 'Lean') return {backgroundColor: '#F1C40F', color: '#111111'};
+            return {backgroundColor: '#EBEDEF', color: '#7F8C8D'};
         }
-        return {color: '#111111'};
-    }
-    """)
+    """))
 
-    grade_style = JsCode("""
-    function(params) {
-        if (params.value === 'Strong Play') return {backgroundColor: '#00a651', color: '#ffffff', fontWeight: '900'};
-        if (params.value === 'Playable') return {backgroundColor: '#A9DFBF', color: '#111111', fontWeight: 'bold'};
-        if (params.value === 'Lean') return {backgroundColor: '#FCF3CF', color: '#111111', fontWeight: 'bold'};
-        if (params.value === 'Pass') return {backgroundColor: '#EEEEEE', color: '#666666'};
-        return {color: '#111111'};
-    }
-    """)
-
-    odds_style = JsCode("""
-    function(params) {
-        let val = parseFloat(String(params.value).replace('+','').trim());
-        if (isNaN(val)) return {color: '#111111'};
-        if (val > 0) return {backgroundColor: '#EBF5FB', color: '#154360', fontWeight: 'bold'};
-        if (val < 0) return {backgroundColor: '#FDEDEC', color: '#922B21', fontWeight: 'bold'};
-        return {color: '#111111'};
-    }
-    """)
-
-    signal_row_style = JsCode("""
-    function(params) {
-        let pick = params.data["Model Pick"];
-        let sharp = params.data["Sharp Dog"];
-        if (pick && sharp && pick !== "PASS" && String(pick).trim().toUpperCase() === String(sharp).trim().toUpperCase()) {
-            return {backgroundColor: '#EEF7FF'};
+    # Advanced Micro-Format Layer Conditional Style Scripts
+    ev_format_script = JsCode("""
+        function(p) {
+            let v = parseFloat(String(p.value).trim());
+            if(isNaN(v)) return {color: '#111111'};
+            if(v >= 15) return {backgroundColor: '#2196F3', color: '#ffffff', fontWeight: 'bold'};
+            if(v > 0) return {backgroundColor: '#E3F2FD', color: '#0D47A1'};
+            if(v < 0) return {backgroundColor: '#FFEBEE', color: '#C62828'};
+            return {color: '#111111'};
         }
-        return {};
-    }
+    """)
+    
+    odds_format_script = JsCode("""
+        function(p) {
+            let v = parseFloat(String(p.value).replace('+','').trim());
+            if(isNaN(v)) return {color: '#111111'};
+            return v > 0 ? {backgroundColor: '#E8F8F5', color: '#117A65', fontWeight: '700'} : {backgroundColor: '#FBEEF8', color: '#884EA0', fontWeight: '700'};
+        }
     """)
 
-    for col in ["EV Away", "EV Home", "Pick EV"]:
-        if col in display_df.columns: gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=ev_style)
+    for ev_col in ["EV Away", "EV Home", "Pick EV"]:
+        if ev_col in working_df.columns: gb.configure_column(ev_col, cellStyle=ev_format_script)
+    for odds_col in ["Away Odds", "Home Odds", "Pick Odds"]:
+        if odds_col in working_df.columns: gb.configure_column(odds_col, cellStyle=odds_format_script)
 
-    for col in ["Diff Away", "Diff Home", "Pick Diff"]:
-        if col in display_df.columns: gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=diff_style)
-
-    for col in ["Away Odds", "Home Odds", "Pick Odds"]:
-        if col in display_df.columns: gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=odds_style)
-
-    if "Sharp Dog" in display_df.columns: gb.configure_column("Sharp Dog", width=125, cellStyle=sharp_style)
-    if "Model Pick" in display_df.columns: gb.configure_column("Model Pick", pinned="right", width=140, cellStyle=pick_style)
-    if "Grade" in display_df.columns: gb.configure_column("Grade", pinned="right", width=120, cellStyle=grade_style)
-
-    for col in ["Sharp Away", "Sharp Home", "Vegas Win Away", "Vegas Win Home", "My Win Away", "My Win Home"]:
-        if col in display_df.columns: gb.configure_column(col, width=125, cellStyle=base_text_style)
-
-    grid_options = gb.build()
-    grid_options["getRowStyle"] = signal_row_style
-
-    AgGrid(
-        display_df,
-        gridOptions=grid_options,
-        height=height,
+    # Compile Configuration Map
+    g_options = gb.build()
+    
+    # Render Application Frame
+    response = AgGrid(
+        working_df,
+        gridOptions=g_options,
+        height=grid_height,
         fit_columns_on_grid_load=False,
         allow_unsafe_jscode=True,
-        theme="balham",
+        theme="alpine",
         enable_enterprise_modules=False,
+        update_mode="MODEL_CHANGED"
     )
+    return response
 
 
 # ============================================================
-# LOAD + VALIDATE
+# MASTER SUITE CORE VIEWPORTS
 # ============================================================
+st.title("⚾ MLB Quantitative Command Center")
+st.caption("High-velocity computational matrix driving predictive delta analysis.")
 
-df = load_data()
-if df.empty: st.stop()
+# System Diagnostics Row
+total_active_slate = len(base_df)
+active_execution_plays = base_df[base_df["Model Pick"] != "PASS"]
+sharp_money_nodes = base_df[base_df["Sharp Dog"].astype(str).str.strip() != ""]
+confluence_nodes = base_df[base_df.apply(lambda r: (str(r["Sharp Dog"]).strip() != "" and str(r["Model Pick"]).strip().upper() == str(r["Sharp Dog"]).strip().upper()), axis=1)]
 
-required_cols = [
-    "Away Team", "Home Team", "Away Odds", "Home Odds", "Sharp Away",
-    "Sharp Home", "Sharp Dog", "Vegas Win Away", "Vegas Win Home",
-    "My Win Away", "My Win Home", "Diff Away", "Diff Home", "EV Away", "EV Home"
-]
+idx_c1, idx_c2, idx_c3, idx_c4 = st.columns(4)
+idx_c1.metric("Slate Volume", total_active_slate)
+idx_c2.metric("Execution Triggers", len(active_execution_plays))
+idx_c3.metric("Sharp Monitored Assets", len(sharp_money_nodes))
+idx_c4.metric("Systemic Confluences", len(confluence_nodes))
 
-missing = [c for c in required_cols if c not in df.columns]
-if missing:
-    st.error(f"Missing columns in APP_EXPORT: {missing}")
-    st.stop()
-
-df = df[df["Away Team"].astype(str).str.strip() != ""].copy().reset_index(drop=True)
-
-
-# ============================================================
-# BUILD MODEL FIELDS
-# ============================================================
-
-picks = df.apply(get_pick, axis=1)
-df["Model Pick"] = [p[0] for p in picks]
-df["Pick Side"] = [p[1] for p in picks]
-df["Pick EV"] = [p[2] for p in picks]
-df["Pick Diff"] = [p[3] for p in picks]
-df["Pick Odds"] = [p[4] for p in picks]
-
-df["Grade"] = df.apply(lambda r: grade_play(r["Pick EV"], r["Pick Diff"]), axis=1)
-
+st.write("---")
 
 # ============================================================
-# FILTERS / DATASETS
+# REAL-TIME CONSOLE VARIABLE MONITOR PANEL
 # ============================================================
+st.markdown("### 🖥️ Live Node Telemetry")
+st.markdown("<small>Select any row inside the data grids below to instantly lock and track that specific match variable array.</small>", unsafe_allow_html=True)
 
-model_plays = df[df["Model Pick"] != "PASS"].copy()
+# Container panel that updates when user targets table rows
+monitor_anchor = st.empty()
 
-top_plays = pd.DataFrame()
-if not model_plays.empty:
-    top_plays = model_plays.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False]).head(5)
-
-sharp_dogs = df[df["Sharp Dog"].astype(str).str.strip() != ""].copy()
-if not sharp_dogs.empty:
-    sharp_dogs = sharp_dogs.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
-
-model_dogs = pd.DataFrame()
-if not model_plays.empty:
-    model_dogs = model_plays[model_plays.apply(lambda r: is_dog(r["Pick Odds"]), axis=1)].copy()
-    if not model_dogs.empty:
-        model_dogs = model_dogs.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
-
-signals = pd.DataFrame()
-if not model_plays.empty:
-    signals = model_plays[
-        model_plays.apply(
-            lambda r: (str(r["Sharp Dog"]).strip() != "" and normalize(r["Model Pick"]) == normalize(r["Sharp Dog"])),
-            axis=1
-        )
-    ].copy()
-    if not signals.empty:
-        signals = signals.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
-
-
-# ============================================================
-# DISPLAY
-# ============================================================
-
-st.title("⚾ MLB Command Center")
-st.caption("Spreadsheet-style betting board powered by APP_EXPORT")
-
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Games On Board", len(df))
-c2.metric("Active Model Plays", len(model_plays))
-c3.metric("Tracked Sharp Dogs", len(sharp_dogs))
-c4.metric("Model Underdogs", len(model_dogs))
-c5.metric("System Confluence Signals", len(signals))
-
-# Clean layout with data up front and operational guide at the end index
-tab1, tab2, tab3, tab4, tab5, tab0 = st.tabs([
-    "All Games", "Top 5 Plays", "Sharp Dogs", "Model Dogs", "Signal Plays", "📖 How to Read"
+# Render Application Tab Routers
+tab_all, tab_premium, tab_sharps, tab_confluence, tab_guide = st.tabs([
+    "All Games Matrix", "Top System Plays", "Sharp Money Tracker", "System Confluence Signals", "📖 System Logic Guide"
 ])
 
-with tab1:
-    st.subheader("All Boarded Formations")
-    show_grid(df, height=850)
+selected_row_data = None
 
-with tab2:
-    st.subheader("Top 5 Premium System Plays")
-    if top_plays.empty: st.info("No active model plays found.")
-    else: show_grid(top_plays, height=500)
+with tab_all:
+    st.markdown("### Master Active Board")
+    grid_response = compile_interactive_grid(base_df, grid_height=500)
+    if grid_response.selected_rows:
+        selected_row_data = grid_response.selected_rows[0]
 
-with tab3:
-    st.subheader("Sharp Syndicate Underdog Targets")
-    if sharp_dogs.empty: st.info("No sharp dogs listed.")
-    else: show_grid(sharp_dogs, height=850)
+with tab_premium:
+    st.markdown("### Premium Algorithmic Formations")
+    if not active_execution_plays.empty:
+        top_premium = active_execution_plays.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False]).head(5)
+        premium_grid_response = compile_interactive_grid(top_premium, grid_height=300)
+        if premium_grid_response.selected_rows:
+            selected_row_data = premium_grid_response.selected_rows[0]
+    else:
+        st.info("No formations currently clear the Sidebar execution parameters.")
 
-with tab4:
-    st.subheader("Model Edge Underdog Formations")
-    if model_dogs.empty: st.info("No model underdog plays found.")
-    else: show_grid(model_dogs, height=850)
+with tab_sharps:
+    st.markdown("### Tracked Sharp Syndicate Placements")
+    if not sharp_money_nodes.empty:
+        sharp_sorted = sharp_money_nodes.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
+        sharp_grid_response = compile_interactive_grid(sharp_sorted, grid_height=350)
+        if sharp_grid_response.selected_rows:
+            selected_row_data = sharp_grid_response.selected_rows[0]
+    else:
+        st.info("No active sharp delta found on the current slate export.")
 
-with tab5:
-    st.subheader("System Confluence (Model & Sharp Alignment)")
-    if signals.empty: st.info("No sharp/model alignment plays found.")
-    else: show_grid(signals, height=850)
+with tab_confluence:
+    st.markdown("### Institutional Model Convergence Points")
+    if not confluence_nodes.empty:
+        confluence_sorted = confluence_nodes.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
+        conf_grid_response = compile_interactive_grid(confluence_sorted, grid_height=350)
+        if conf_grid_response.selected_rows:
+            selected_row_data = conf_grid_response.selected_rows[0]
+    else:
+        st.info("No structural convergence points detected between model parameters and sharp actions.")
 
-with tab0:
-    st.subheader("System Rules & Interpretation Playbook")
-    col_left, col_right = st.columns(2)
-    
-    with col_left:
+with tab_guide:
+    st.markdown("### Matrix Structural Protocols")
+    gl, gr = st.columns(2)
+    with gl:
         st.markdown("""
-        ### 🎯 Core Execution Thresholds
-        The model checks specific edge benchmarks for both `Away` and `Home` columns to calculate valid selections. A team is strictly targeted **only** if it ticks both parameters simultaneously:
-        * **Expected Value (EV):** Must be strictly greater than **5.0** (`EV > 5`).
-        * **Win Percentage Differential (Diff):** Must be equal to or greater than **5.0** (`Diff >= 5`).
-        
-        ### 📊 Play Tier Grading
-        When a play is identified, its strength is categorized dynamically according to the final **Pick EV** and **Pick Diff** values:
-        * 🟢 **Strong Play:** EV $\ge$ 20 AND Diff $\ge$ 10.
-        * 🟡 **Playable:** EV $\ge$ 10 AND Diff $\ge$ 5.
-        * 🔵 **Lean:** EV $>$ 5 AND Diff $\ge$ 5.
-        * ⚪ **Pass:** Fails to meet baseline limits.
+        #### 📈 System Parameters
+        * **Target Strategy:** Ingests live sportsbook baseline structures, parses implied payout probabilities, and runs real-time difference comparison to your internal model calculations.
+        * **Formula Node Array:** Target selection triggers when `EV > Threshold` AND `Diff >= Threshold` simultaneously.
         """)
-        
-    with col_right:
+    with gr:
         st.markdown("""
-        ### 🔍 Reading the Market Segments
-        #### 📉 Favorites vs. 🐶 Underdogs
-        The application isolates the line pricing based on standard American odds notations:
-        * **Favorites (Minus Money):** Displayed with negative red-tinted values. High market probability hooks.
-        * **Underdogs (Plus Money / Dogs):** Isolated via the **Model Dogs** tracking layer whenever `Odds > 0`. High-leverage inefficiency models.
-        
-        #### 📈 Sharp Action & Convergence Signals
-        * **Sharp Tracking:** Denotes where professional trading syndicates are exposing risk capital.
-        * **Convergence Signals:** Found in the **Signal Plays** panel. Triggers when the **Model Pick** cleanly matches the designated **Sharp Dog**. These custom rows highlight inside the grid to track systemic alignment.
+        #### 🎨 Micro-Color Classifications
+        * **Blue Grid Highlights:** Captures outsized mathematical expected value arrays ($\ge$ 15 EV margin).
+        * **Soft Green / Purple Odds Blocks:** Isolates underdogs vs favorites dynamically via line structure orientation.
         """)
+
+# Execute telemetry panel updates if row data has been selected
+if selected_row_data is not None:
+    # Safely convert data nodes
+    t_away = selected_row_data.get("Away Team", "N/A")
+    t_home = selected_row_data.get("Home Team", "N/A")
+    v_win_away = selected_row_data.get("Vegas Win Away", "0%")
+    v_win_home = selected_row_data.get("Vegas Win Home", "0%")
+    m_win_away = selected_row_data.get("My Win Away", "0%")
+    m_win_home = selected_row_data.get("My Win Home", "0%")
+    p_ev = selected_row_data.get("Pick EV", 0.0)
+    p_diff = selected_row_data.get("Pick Diff", 0.0)
+    p_pick = selected_row_data.get("Model Pick", "PASS")
+    p_grade = selected_row_data.get("Grade", "Pass")
+    s_dog = selected_row_data.get("Sharp Dog", "")
+
+    with monitor_anchor.container():
+        st.markdown(f"""
+        <div class="monitor-card">
+            <h4>⚡ TRACKING METRIC ARRAY: {t_away} vs {t_home}</h4>
+            <table style="width:100%; border:none; font-family:monospace; font-size:14px; color:#2C3E50;">
+                <tr>
+                    <td><b>System Verdict:</b> <span style="color:#1E8449; font-weight:800;">{p_pick} ({p_grade})</span></td>
+                    <td><b>Calculated EV Edge:</b> {p_ev}</td>
+                    <td><b>Win Split Delta:</b> +{p_diff}%</td>
+                </tr>
+                <tr>
+                    <td><b>Vegas Implied Projection:</b> Away: {v_win_away} | Home: {v_win_home}</td>
+                    <td><b>Your Model Implied:</b> Away: {m_win_away} | Home: {m_win_home}</td>
+                    <td><b>Sharp Syndicate Target:</b> <span style="color:#2980B9; font-weight:700;">{s_dog if s_dog else 'None Detected'}</span></td>
+                </tr>
+            </table>
+        </div>
+        """, unsafe_allow_html=True)
+else:
+    with monitor_anchor.container():
+        st.info("📡 Console Listening. Click any matchup row across the matrices below to load variables into live telemetry display panel.")
