@@ -1,32 +1,16 @@
 import streamlit as st
 import pandas as pd
+from st_aggrid import AgGrid, GridOptionsBuilder
 
-# ============================================================
-# PAGE CONFIG
-# ============================================================
-
-st.set_page_config(
-    page_title="MLB Command Center",
-    layout="wide"
-)
-
-# ============================================================
-# GOOGLE SHEET SETTINGS
-# ============================================================
+st.set_page_config(page_title="MLB Command Center", layout="wide")
 
 SHEET_ID = "1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0"
 SHEET_NAME = "APP_EXPORT"
-
 URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}"
 
 EV_THRESHOLD = 5
 DIFF_THRESHOLD = 5
-TABLE_HEIGHT = 1000
 
-
-# ============================================================
-# LOAD DATA
-# ============================================================
 
 @st.cache_data(ttl=30)
 def load_data():
@@ -38,10 +22,6 @@ def load_data():
         st.error(f"Sync Error: {e}")
         return pd.DataFrame()
 
-
-# ============================================================
-# HELPERS
-# ============================================================
 
 def to_num(v):
     try:
@@ -88,7 +68,7 @@ def grade_play(ev, diff):
     diff = to_num(diff)
 
     if ev >= 20 and diff >= 10:
-        return "Strong"
+        return "Strong Play"
     if ev >= 10 and diff >= 5:
         return "Playable"
     if ev > 5:
@@ -97,89 +77,82 @@ def grade_play(ev, diff):
     return "Pass"
 
 
-# ============================================================
-# COLOR CODING
-# ============================================================
+def prepare_display(df):
+    cols = [
+        "Away Team",
+        "Home Team",
+        "Away Odds",
+        "Home Odds",
+        "Sharp Away",
+        "Sharp Home",
+        "Sharp Dog",
+        "Vegas Win Away",
+        "Vegas Win Home",
+        "My Win Away",
+        "My Win Home",
+        "Diff Away",
+        "Diff Home",
+        "EV Away",
+        "EV Home",
+        "Model Pick",
+        "Pick Side",
+        "Pick Odds",
+        "Pick EV",
+        "Pick Diff",
+        "Grade",
+    ]
 
-def color_board(row):
-    styles = [""] * len(row)
-    col = {c: i for i, c in enumerate(row.index)}
-
-    for c in ["EV Away", "EV Home", "Pick EV"]:
-        if c in col:
-            val = to_num(row[c])
-
-            if val >= 20:
-                styles[col[c]] = "background-color:#00a651;color:white;font-weight:bold;"
-            elif val >= 10:
-                styles[col[c]] = "background-color:#a9dfbf;color:black;font-weight:bold;"
-            elif val > 0:
-                styles[col[c]] = "background-color:#e8f8f5;color:black;"
-            elif val < 0:
-                styles[col[c]] = "background-color:#f5b7b1;color:black;"
-
-    for c in ["Diff Away", "Diff Home", "Pick Diff"]:
-        if c in col:
-            val = to_num(row[c])
-
-            if val >= 10:
-                styles[col[c]] = "background-color:#d4efdf;color:black;font-weight:bold;"
-            elif val >= 5:
-                styles[col[c]] = "background-color:#fff3cd;color:black;"
-            elif val <= -10:
-                styles[col[c]] = "background-color:#f5b7b1;color:black;"
-
-    if "Model Pick" in col:
-        if row["Model Pick"] != "PASS":
-            styles[col["Model Pick"]] = "background-color:#1e8449;color:white;font-weight:bold;"
-        else:
-            styles[col["Model Pick"]] = "background-color:#eeeeee;color:#777;"
-
-    if "Grade" in col:
-        if row["Grade"] == "Strong":
-            styles[col["Grade"]] = "background-color:#00a651;color:white;font-weight:bold;"
-        elif row["Grade"] == "Playable":
-            styles[col["Grade"]] = "background-color:#a9dfbf;color:black;font-weight:bold;"
-        elif row["Grade"] == "Lean":
-            styles[col["Grade"]] = "background-color:#fff3cd;color:black;"
-        else:
-            styles[col["Grade"]] = "background-color:#eeeeee;color:#777;"
-
-    if "Sharp Dog" in col and str(row["Sharp Dog"]).strip() != "":
-        styles[col["Sharp Dog"]] = "background-color:#d6eaf8;color:#154360;font-weight:bold;"
-
-    if (
-        "Model Pick" in row.index
-        and "Sharp Dog" in row.index
-        and row["Model Pick"] != "PASS"
-        and str(row["Sharp Dog"]).strip() != ""
-        and normalize(row["Model Pick"]) == normalize(row["Sharp Dog"])
-    ):
-        for i in range(len(styles)):
-            if styles[i] == "":
-                styles[i] = "background-color:#eef7ff;"
-
-    return styles
+    cols = [c for c in cols if c in df.columns]
+    return df[cols].copy()
 
 
-# ============================================================
-# TABLE RENDERER
-# ============================================================
+def show_grid(df, height=825):
+    display_df = prepare_display(df)
 
-def show_table(dataframe):
-    cols = [c for c in DISPLAY_COLS if c in dataframe.columns]
+    gb = GridOptionsBuilder.from_dataframe(display_df)
 
-    st.dataframe(
-        dataframe[cols].style.apply(color_board, axis=1),
-        use_container_width=False,
-        hide_index=True,
-        height=TABLE_HEIGHT
+    gb.configure_default_column(
+        resizable=True,
+        sortable=True,
+        filter=True,
+        minWidth=110,
+        wrapText=False,
+        autoHeight=False,
     )
 
+    # Pinned left like a spreadsheet
+    if "Away Team" in display_df.columns:
+        gb.configure_column("Away Team", pinned="left", width=130)
+    if "Home Team" in display_df.columns:
+        gb.configure_column("Home Team", pinned="left", width=130)
 
-# ============================================================
-# LOAD + VALIDATE
-# ============================================================
+    # Pinned right for decision columns
+    if "Model Pick" in display_df.columns:
+        gb.configure_column("Model Pick", pinned="right", width=140)
+    if "Grade" in display_df.columns:
+        gb.configure_column("Grade", pinned="right", width=120)
+
+    # Wider important columns
+    for col in ["Sharp Dog", "Pick Side", "Pick Odds"]:
+        if col in display_df.columns:
+            gb.configure_column(col, width=120)
+
+    for col in ["EV Away", "EV Home", "Pick EV", "Diff Away", "Diff Home", "Pick Diff"]:
+        if col in display_df.columns:
+            gb.configure_column(col, width=115, type=["numericColumn"])
+
+    grid_options = gb.build()
+
+    AgGrid(
+        display_df,
+        gridOptions=grid_options,
+        height=height,
+        fit_columns_on_grid_load=False,
+        allow_unsafe_jscode=True,
+        theme="balham",
+        enable_enterprise_modules=False,
+    )
+
 
 df = load_data()
 
@@ -214,11 +187,6 @@ if missing:
 
 df = df[df["Away Team"].astype(str).str.strip() != ""].copy().reset_index(drop=True)
 
-
-# ============================================================
-# BUILD MODEL FIELDS
-# ============================================================
-
 picks = df.apply(get_pick, axis=1)
 
 df["Model Pick"] = [p[0] for p in picks]
@@ -231,48 +199,6 @@ df["Grade"] = df.apply(
     lambda r: grade_play(r["Pick EV"], r["Pick Diff"]),
     axis=1
 )
-
-
-# ============================================================
-# DISPLAY COLUMNS — KEEP FULL BOARD
-# ============================================================
-
-DISPLAY_COLS = [
-    "Away Team",
-    "Home Team",
-
-    "Away Odds",
-    "Home Odds",
-
-    "Sharp Away",
-    "Sharp Home",
-    "Sharp Dog",
-
-    "Vegas Win Away",
-    "Vegas Win Home",
-
-    "My Win Away",
-    "My Win Home",
-
-    "Diff Away",
-    "Diff Home",
-
-    "EV Away",
-    "EV Home",
-
-    "Model Pick",
-    "Pick Side",
-    "Pick Odds",
-    "Pick EV",
-    "Pick Diff",
-
-    "Grade",
-]
-
-
-# ============================================================
-# FILTERS / DATASETS
-# ============================================================
 
 model_plays = df[df["Model Pick"] != "PASS"].copy()
 
@@ -308,13 +234,8 @@ signals = model_plays[
     ascending=[False, False]
 )
 
-
-# ============================================================
-# DISPLAY
-# ============================================================
-
 st.title("⚾ MLB Command Center")
-st.caption("Reading directly from APP_EXPORT")
+st.caption("Spreadsheet-style betting board powered by APP_EXPORT")
 
 c1, c2, c3, c4, c5 = st.columns(5)
 
@@ -334,36 +255,32 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 
 with tab1:
     st.subheader("All Games")
-    show_table(df)
+    show_grid(df)
 
 with tab2:
     st.subheader("Top 5 Model Plays")
-
     if top_plays.empty:
         st.info("No model plays found.")
     else:
-        show_table(top_plays)
+        show_grid(top_plays, height=500)
 
 with tab3:
     st.subheader("Sharp Dogs Listed In Sheet")
-
     if sharp_dogs.empty:
         st.info("No sharp dogs listed.")
     else:
-        show_table(sharp_dogs)
+        show_grid(sharp_dogs)
 
 with tab4:
     st.subheader("Model Underdog Plays")
-
     if model_dogs.empty:
         st.info("No model underdog plays found.")
     else:
-        show_table(model_dogs)
+        show_grid(model_dogs)
 
 with tab5:
     st.subheader("Signal Plays")
-
     if signals.empty:
         st.info("No sharp/model alignment plays found.")
     else:
-        show_table(signals)
+        show_grid(signals)
