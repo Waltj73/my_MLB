@@ -302,7 +302,7 @@ if not model_plays.empty:
 
 sharp_dogs = df[df["Sharp Dog"].astype(str).str.strip() != ""].copy()
 if not sharp_dogs.empty:
-    sharp_dogs = sharp_dogs.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
+    sharp_dogs = sharp_values = sharp_dogs.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
 
 model_dogs = pd.DataFrame()
 if not model_plays.empty:
@@ -336,7 +336,7 @@ c3.metric("Tracked Sharp Dogs", len(sharp_dogs))
 c4.metric("Model Underdogs", len(model_dogs))
 c5.metric("System Confluence Signals", len(signals))
 
-# "How to Read" tab array position moved cleanly to the end index
+# Tabs layout with 'How to Read' at the final position
 tab1, tab2, tab3, tab4, tab5, tab0 = st.tabs([
     "All Games", "Top 5 Plays", "Sharp Dogs", "Model Dogs", "Signal Plays", "📖 How to Read"
 ])
@@ -355,9 +355,9 @@ with tab3:
     if sharp_dogs.empty:
         st.info("No sharp dogs listed.")
     else:
-        show_grid(sharp_dogs, height=450)
+        show_grid(sharp_dogs, height=400)
         st.write("---")
-        st.markdown("### 🔍 Live Sharp Dog Market Analysis")
+        st.markdown("### 🛠️ Interrogating the Sharp Number Placement")
         
         for idx, row in sharp_dogs.iterrows():
             dog_team = str(row["Sharp Dog"]).strip()
@@ -371,25 +371,40 @@ with tab3:
             ev_val = to_num(row["EV Away"] if is_away else row["EV Home"])
             diff_val = to_num(row["Diff Away"] if is_away else row["Diff Home"])
             move_val = to_num(row["Sharp Away"] if is_away else row["Sharp Home"])
+            model_pick = str(row["Model Pick"]).strip()
             
-            st.markdown(f"#### 🐶 {dog_team} vs {opp_team} ({dog_odds})")
-            analysis_bullets = []
-            
-            if ev_val > 0:
-                analysis_bullets.append(f"**Mathematical Edge:** The model clocks a positive Expected Value (**+{ev_val}**) on this line. Sharps are targeting a pricing discrepancy where the payout profile outweighs the calculated risk.")
-            else:
-                analysis_bullets.append(f"**Price Action Play:** Internal EV sits at **{ev_val}**, suggesting sharps are capitalizing on a pure market sentiment angle or reactive line defense rather than raw analytical margin.")
+            with st.container():
+                st.markdown(f"#### 🔍 **{dog_team}** vs {opp_team} ({dog_odds})")
                 
-            if diff_val > 0:
-                analysis_bullets.append(f"**Probability Gap:** Your framework projects a **{my_win}%** true win probability versus the market's implied baseline of **{v_win}%** (a clear **+{diff_val}%** raw model split). Professional syndicates are exposing capital here because they project this team wins at a higher frequency than the book's current pricing implies.")
-            else:
-                analysis_bullets.append(f"**Implied Hold:** The win percentage differential stands at **{diff_val}%**, meaning sharps are stepping in to protect against an overly inflated favorite line driven by one-sided retail or public risk liability.")
+                # --- CASE 1: CONFLUENCE ALIGNMENT (Model matches Sharp Dog) ---
+                if normalize(model_pick) == normalize(dog_team):
+                    st.success(
+                        f"🎯 **SYSTEM CONFLUENCE:** Both your model analytics and active smart money are hammering this exact number. "
+                        f"Your framework projects a **{my_win}%** true win probability against the bookmaker's implied break-even threshold of **{v_win}%**. "
+                        f"Because you hold a raw mathematically backed edge of **+{diff_val}%** coupled with an EV of **+{ev_val}**, sharps are exposed here "
+                        f"simply because the payout return significantly outpaces the physical probability of the event. This is a high-conviction value buy."
+                    )
                 
-            if move_val != 0:
-                analysis_bullets.append(f"**Volume Signature:** The sheet logs a **{move_val}%** line delta on this position. This confirms active, heavy underlying betting limits moving through the market that correspond with professional risk positioning.")
+                # --- CASE 2: SHARPS BUYING A DOG THAT YOUR MODEL PASSES ON ---
+                elif model_pick == "PASS":
+                    st.info(
+                        f"⚠️ **PURE PRICE METRIC / ASSET DISCOUNT:** Your personal model parameters filtered this game out as a baseline 'PASS'. "
+                        f"However, professional groups are moving this specific line (Current Tracked Delta: **{move_val}%**). "
+                        f"Why are they on it when your baseline numbers passed? Sharps aren't necessarily expecting a direct victory; they are taking advantage of a "
+                        f"forced public inflation loop. Public retail accounts are flooding the book to back {opp_team}, forcing oddsmakers to artificially increase "
+                        f"the payout on {dog_team} to manage liability. Sharps are stepping in because the price has been pushed past its efficient mathematical limit."
+                    )
                 
-            for bullet in analysis_bullets:
-                st.markdown(f"* {bullet}")
+                # --- CASE 3: SHARPS ON THE DOG, BUT YOUR MODEL SAYS BACK THE FAVORITE ---
+                else:
+                    st.error(
+                        f"🚨 **DIVERGENT DISCREPANCY WARNING:** Your model has calculated a strict execution trigger to back the favorite (**{model_pick}**), "
+                        f"but tracking metrics show smart money syndicates are exposing risk capital to the underdog (**{dog_team}**). "
+                        f"If the line is aggressively drifting wider (e.g. from +120 up to +135) and sharps are *still* stepping in, they are capturing "
+                        f"maximum line value on micro-matchup anomalies (like customized umpire trends or specific high-spin pitching splits) that your high-level numbers are missing. "
+                        f"Check if there is a late line drift before risking capital against sharp exposure."
+                    )
+                st.write("")
 
 with tab4:
     st.subheader("Model Edge Underdog Formations")
