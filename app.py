@@ -22,6 +22,8 @@ URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sh
 EV_THRESHOLD = 5
 DIFF_THRESHOLD = 5
 
+TABLE_HEIGHT = 950
+
 
 # ============================================================
 # LOAD DATA
@@ -87,7 +89,7 @@ def grade_play(ev, diff):
     diff = to_num(diff)
 
     if ev >= 20 and diff >= 10:
-        return "Strong Play"
+        return "Strong"
     if ev >= 10 and diff >= 5:
         return "Playable"
     if ev > 5:
@@ -96,10 +98,15 @@ def grade_play(ev, diff):
     return "Pass"
 
 
+# ============================================================
+# COLOR CODING
+# ============================================================
+
 def color_board(row):
     styles = [""] * len(row)
     col = {c: i for i, c in enumerate(row.index)}
 
+    # EV columns
     for c in ["EV Away", "EV Home", "Pick EV"]:
         if c in col:
             val = to_num(row[c])
@@ -113,6 +120,7 @@ def color_board(row):
             elif val < 0:
                 styles[col[c]] = "background-color:#f5b7b1;color:black;"
 
+    # Diff columns
     for c in ["Diff Away", "Diff Home", "Pick Diff"]:
         if c in col:
             val = to_num(row[c])
@@ -124,14 +132,16 @@ def color_board(row):
             elif val <= -10:
                 styles[col[c]] = "background-color:#f5b7b1;color:black;"
 
+    # Pick
     if "Model Pick" in col:
         if row["Model Pick"] != "PASS":
             styles[col["Model Pick"]] = "background-color:#1e8449;color:white;font-weight:bold;"
         else:
             styles[col["Model Pick"]] = "background-color:#eeeeee;color:#777;"
 
+    # Grade
     if "Grade" in col:
-        if row["Grade"] == "Strong Play":
+        if row["Grade"] == "Strong":
             styles[col["Grade"]] = "background-color:#00a651;color:white;font-weight:bold;"
         elif row["Grade"] == "Playable":
             styles[col["Grade"]] = "background-color:#a9dfbf;color:black;font-weight:bold;"
@@ -140,9 +150,11 @@ def color_board(row):
         else:
             styles[col["Grade"]] = "background-color:#eeeeee;color:#777;"
 
+    # Sharp Dog
     if "Sharp Dog" in col and str(row["Sharp Dog"]).strip() != "":
         styles[col["Sharp Dog"]] = "background-color:#d6eaf8;color:#154360;font-weight:bold;"
 
+    # Signal row
     if (
         "Model Pick" in row.index
         and "Sharp Dog" in row.index
@@ -155,6 +167,37 @@ def color_board(row):
                 styles[i] = "background-color:#eef7ff;"
 
     return styles
+
+
+# ============================================================
+# TABLE RENDERER
+# ============================================================
+
+def show_table(dataframe):
+    st.dataframe(
+        dataframe[DISPLAY_COLS].style.apply(color_board, axis=1),
+        use_container_width=True,
+        hide_index=True,
+        height=TABLE_HEIGHT,
+        column_config={
+            "Away Team": st.column_config.TextColumn("Away", width="small"),
+            "Away Odds": st.column_config.TextColumn("A Odds", width="small"),
+            "Home Team": st.column_config.TextColumn("Home", width="small"),
+            "Home Odds": st.column_config.TextColumn("H Odds", width="small"),
+            "Sharp Dog": st.column_config.TextColumn("Sharp", width="small"),
+            "My Win Away": st.column_config.TextColumn("A Win%", width="small"),
+            "My Win Home": st.column_config.TextColumn("H Win%", width="small"),
+            "Diff Away": st.column_config.NumberColumn("A Diff", width="small", format="%.1f"),
+            "Diff Home": st.column_config.NumberColumn("H Diff", width="small", format="%.1f"),
+            "EV Away": st.column_config.NumberColumn("A EV", width="small", format="%.1f"),
+            "EV Home": st.column_config.NumberColumn("H EV", width="small", format="%.1f"),
+            "Model Pick": st.column_config.TextColumn("Pick", width="small"),
+            "Pick Odds": st.column_config.TextColumn("P Odds", width="small"),
+            "Pick EV": st.column_config.NumberColumn("P EV", width="small", format="%.1f"),
+            "Pick Diff": st.column_config.NumberColumn("P Diff", width="small", format="%.1f"),
+            "Grade": st.column_config.TextColumn("Grade", width="small"),
+        }
+    )
 
 
 # ============================================================
@@ -171,11 +214,7 @@ required_cols = [
     "Home Team",
     "Away Odds",
     "Home Odds",
-    "Sharp Away",
-    "Sharp Home",
     "Sharp Dog",
-    "Vegas Win Away",
-    "Vegas Win Home",
     "My Win Away",
     "My Win Home",
     "Diff Away",
@@ -212,17 +251,13 @@ df["Grade"] = df.apply(
     axis=1
 )
 
-# Cleaner display order
-display_cols = [
+# Compact columns so left/right fits better
+DISPLAY_COLS = [
     "Away Team",
-    "Home Team",
     "Away Odds",
+    "Home Team",
     "Home Odds",
-    "Sharp Away",
-    "Sharp Home",
     "Sharp Dog",
-    "Vegas Win Away",
-    "Vegas Win Home",
     "My Win Away",
     "My Win Home",
     "Diff Away",
@@ -230,14 +265,18 @@ display_cols = [
     "EV Away",
     "EV Home",
     "Model Pick",
-    "Pick Side",
     "Pick Odds",
     "Pick EV",
     "Pick Diff",
     "Grade",
 ]
 
-display_cols = [c for c in display_cols if c in df.columns]
+DISPLAY_COLS = [c for c in DISPLAY_COLS if c in df.columns]
+
+
+# ============================================================
+# FILTERS / DATASETS
+# ============================================================
 
 model_plays = df[df["Model Pick"] != "PASS"].copy()
 
@@ -246,20 +285,16 @@ top_plays = model_plays.sort_values(
     ascending=[False, False]
 ).head(5)
 
-# FIXED: this now uses the actual Sharp Dog column from your sheet
 sharp_dogs = df[
     df["Sharp Dog"].astype(str).str.strip() != ""
-].copy()
-
-sharp_dogs = sharp_dogs.sort_values(
+].copy().sort_values(
     by=["Pick EV", "Pick Diff"],
     ascending=[False, False]
 )
 
-# Model underdogs only
 model_dogs = model_plays[
     model_plays.apply(lambda r: is_dog(r["Pick Odds"]), axis=1)
-].sort_values(
+].copy().sort_values(
     by=["Pick EV", "Pick Diff"],
     ascending=[False, False]
 )
@@ -272,7 +307,7 @@ signals = model_plays[
         ),
         axis=1
     )
-].sort_values(
+].copy().sort_values(
     by=["Pick EV", "Pick Diff"],
     ascending=[False, False]
 )
@@ -297,21 +332,13 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "All Games",
     "Top 5 Plays",
     "Sharp Dogs",
-    "Model Underdogs",
+    "Model Dogs",
     "Signal Plays"
 ])
 
-TABLE_HEIGHT = 850
-
 with tab1:
     st.subheader("All Games")
-
-    st.dataframe(
-        df[display_cols].style.apply(color_board, axis=1),
-        use_container_width=True,
-        hide_index=True,
-        height=TABLE_HEIGHT
-    )
+    show_table(df)
 
 with tab2:
     st.subheader("Top 5 Model Plays")
@@ -319,12 +346,7 @@ with tab2:
     if top_plays.empty:
         st.info("No model plays found.")
     else:
-        st.dataframe(
-            top_plays[display_cols].style.apply(color_board, axis=1),
-            use_container_width=True,
-            hide_index=True,
-            height=TABLE_HEIGHT
-        )
+        show_table(top_plays)
 
 with tab3:
     st.subheader("Sharp Dogs Listed In Sheet")
@@ -332,12 +354,7 @@ with tab3:
     if sharp_dogs.empty:
         st.info("No sharp dogs listed.")
     else:
-        st.dataframe(
-            sharp_dogs[display_cols].style.apply(color_board, axis=1),
-            use_container_width=True,
-            hide_index=True,
-            height=TABLE_HEIGHT
-        )
+        show_table(sharp_dogs)
 
 with tab4:
     st.subheader("Model Underdog Plays")
@@ -345,12 +362,7 @@ with tab4:
     if model_dogs.empty:
         st.info("No model underdog plays found.")
     else:
-        st.dataframe(
-            model_dogs[display_cols].style.apply(color_board, axis=1),
-            use_container_width=True,
-            hide_index=True,
-            height=TABLE_HEIGHT
-        )
+        show_table(model_dogs)
 
 with tab5:
     st.subheader("Signal Plays")
@@ -358,9 +370,4 @@ with tab5:
     if signals.empty:
         st.info("No sharp/model alignment plays found.")
     else:
-        st.dataframe(
-            signals[display_cols].style.apply(color_board, axis=1),
-            use_container_width=True,
-            hide_index=True,
-            height=TABLE_HEIGHT
-        )
+        show_table(signals)
