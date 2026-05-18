@@ -6,3 +6,4 @@ lxml
 html5lib
 streamlit-autorefresh
 matplotlib
+streamlit-aggrid
