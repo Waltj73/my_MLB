@@ -89,11 +89,13 @@ def clean_numerical_vector(val):
     except ValueError:
         return 0.0
 
-# AUTOMATED COLUMN SIGNATURE DETECTOR (Prevents KeyError crashes)
+# AUTOMATED COLUMN DETECTOR (Prevents KeyError Crashes)
 PICK_COL = "Model Pick" if "Model Pick" in base_df.columns else "Pick" if "Pick" in base_df.columns else None
+EV_COL = "Pick EV" if "Pick EV" in base_df.columns else "EV" if "EV" in base_df.columns else "EV Away"
+DIFF_COL = "Pick Diff" if "Pick Diff" in base_df.columns else "Diff" if "Diff" in base_df.columns else "Diff Away"
 
 if not PICK_COL:
-    st.error("❌ Column Mapping Fault: Could not find a 'Model Pick' or 'Pick' column in your Google Sheet export. Please verify your spreadsheet headers match.")
+    st.error("❌ Column Mapping Fault: Could not find a 'Model Pick' or 'Pick' column in your Google Sheet export.")
     st.stop()
 
 
@@ -109,8 +111,8 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
             "Away Team", "Home Team", "Away Odds", "Home Odds", "Sharp Away",
             "Sharp Home", "Sharp Dog", "Vegas Win Away", "Vegas Win Home",
             "My Win Away", "My Win Home", "Diff Away", "Diff Home", "EV Away",
-            "EV Home", PICK_COL, "Pick Side", "Pick Odds", "Pick EV",
-            "Pick Diff", "Grade"
+            "EV Home", PICK_COL, "Pick Side", "Pick Odds", EV_COL,
+            DIFF_COL, "Grade"
         ]
         
     valid_cols = [c for c in display_cols if c in target_df.columns]
@@ -133,8 +135,8 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
             }
         """))
     else:
-        gb.configure_column(PICK_COL, pinned="right", width=130, cellStyle=JsCode("""
-            function(p) { return p.value === 'PASS' ? {backgroundColor: '#EBEDEF', color: '#7F8C8D'} : {backgroundColor: '#27AE60', color: '#ffffff', fontWeight: '900', textAlign: 'center'}; }
+        gb.configure_column(PICK_COL, pinned="right", width=130, cellStyle=JsCode(f"""
+            function(p) {{ return p.value === 'PASS' ? {{backgroundColor: '#EBEDEF', color: '#7F8C8D'}} : {{backgroundColor: '#27AE60', color: '#ffffff', fontWeight: '900', textAlign: 'center'}}; }}
         """))
         gb.configure_column("Grade", pinned="right", width=115, cellStyle=JsCode("""
             function(p) {
@@ -156,7 +158,7 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
     """)
 
     if mode != "totals":
-        for ev_col in ["EV Away", "EV Home", "Pick EV"]:
+        for ev_col in ["EV Away", "EV Home", EV_COL]:
             if ev_col in working_df.columns: gb.configure_column(ev_col, cellStyle=ev_format_script)
 
     g_options = gb.build()
@@ -218,9 +220,9 @@ with tab_ou:
 
 with tab_premium:
     if not active_execution_plays.empty:
-        # Sorts cleanly based on your sheet's native Pick EV column formatting
+        # Sorts safely using our detected EV column
         top_premium = active_execution_plays.copy()
-        top_premium["_sort_ev"] = top_premium["Pick EV"].apply(clean_numerical_vector)
+        top_premium["_sort_ev"] = top_premium[EV_COL].apply(clean_numerical_vector)
         top_premium = top_premium.sort_values(by="_sort_ev", ascending=False)
         premium_response = compile_interactive_grid(top_premium, mode="sides", grid_key="premium_grid")
         if premium_response.selected_rows is not None and not premium_response.selected_rows.empty:
@@ -256,8 +258,9 @@ if runtime_selection is not None:
     v_win_home = runtime_selection.get("Vegas Win Home", "0%")
     m_win_away = runtime_selection.get("My Win Away", "0%")
     m_win_home = runtime_selection.get("My Win Home", "0%")
-    p_ev = runtime_selection.get("Pick EV", "0.0")
-    p_diff = runtime_selection.get("Pick Diff", "0.0")
+    
+    p_ev = runtime_selection.get(EV_COL, "0.0")
+    p_diff = runtime_selection.get(DIFF_COL, "0.0")
     p_pick = runtime_selection.get(PICK_COL, "PASS")
     p_grade = runtime_selection.get("Grade", "Pass")
     s_dog = runtime_selection.get("Sharp Dog", "")
