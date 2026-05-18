@@ -18,8 +18,7 @@ st.set_page_config(
 SHEET_ID = "1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0"
 SHEET_NAME = "APP_EXPORT"
 
-# skiprows=1 drops the top text row so your true headers become the column names
-URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}&skiprows=1"
+URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}"
 
 EV_THRESHOLD = 5
 DIFF_THRESHOLD = 5
@@ -33,7 +32,6 @@ DIFF_THRESHOLD = 5
 def load_data():
     try:
         df = pd.read_csv(URL)
-        # Strip any accidental whitespace from the sheet's column headers
         df.columns = [str(c).strip() for c in df.columns]
         return df.fillna("")
     except Exception as e:
@@ -184,60 +182,159 @@ def show_grid(df, height=825):
 
     ev_style = JsCode("""
     function(params) {
-        let val = parseFloat(String(params.value).replace('%','').trim());
-        if (isNaN(val)) return {};
-        if (val >= 20) return {backgroundColor: '#00a651', color: 'white', fontWeight: 'bold'};
-        if (val >= 10) return {backgroundColor: '#7DCEA0', color: 'black', fontWeight: 'bold'};
-        if (val > 0) return {backgroundColor: '#D5F5E3', color: 'black'};
-        if (val < 0) return {backgroundColor: '#F5B7B1', color: 'black'};
+        if (params.value >= 20) {
+            return {
+                backgroundColor: '#00a651',
+                color: 'white',
+                fontWeight: 'bold'
+            };
+        }
+
+        if (params.value >= 10) {
+            return {
+                backgroundColor: '#7DCEA0',
+                color: 'black',
+                fontWeight: 'bold'
+            };
+        }
+
+        if (params.value > 0) {
+            return {
+                backgroundColor: '#D5F5E3',
+                color: 'black'
+            };
+        }
+
+        if (params.value < 0) {
+            return {
+                backgroundColor: '#F5B7B1',
+                color: 'black'
+            };
+        }
+
         return {};
     }
     """)
 
     diff_style = JsCode("""
     function(params) {
-        let val = parseFloat(String(params.value).replace('%','').trim());
-        if (isNaN(val)) return {};
-        if (val >= 10) return {backgroundColor: '#58D68D', color: 'white', fontWeight: 'bold'};
-        if (val >= 5) return {backgroundColor: '#F9E79F', color: 'black', fontWeight: 'bold'};
-        if (val <= -10) return {backgroundColor: '#F1948A', color: 'black'};
+        if (params.value >= 10) {
+            return {
+                backgroundColor: '#58D68D',
+                color: 'white',
+                fontWeight: 'bold'
+            };
+        }
+
+        if (params.value >= 5) {
+            return {
+                backgroundColor: '#F9E79F',
+                color: 'black',
+                fontWeight: 'bold'
+            };
+        }
+
+        if (params.value <= -10) {
+            return {
+                backgroundColor: '#F1948A',
+                color: 'black'
+            };
+        }
+
         return {};
     }
     """)
 
     pick_style = JsCode("""
     function(params) {
-        if (params.value === 'PASS') return {backgroundColor: '#EEEEEE', color: '#666666'};
-        if (params.value) return {backgroundColor: '#1E8449', color: 'white', fontWeight: 'bold'};
+        if (params.value === 'PASS') {
+            return {
+                backgroundColor: '#EEEEEE',
+                color: '#666666'
+            };
+        }
+
+        if (params.value) {
+            return {
+                backgroundColor: '#1E8449',
+                color: 'white',
+                fontWeight: 'bold'
+            };
+        }
+
         return {};
     }
     """)
 
     sharp_style = JsCode("""
     function(params) {
-        if (params.value && String(params.value).trim() !== '') {
-            return {backgroundColor: '#D6EAF8', color: '#154360', fontWeight: 'bold'};
+        if (params.value) {
+            return {
+                backgroundColor: '#D6EAF8',
+                color: '#154360',
+                fontWeight: 'bold'
+            };
         }
+
         return {};
     }
     """)
 
     grade_style = JsCode("""
     function(params) {
-        if (params.value === 'Strong Play') return {backgroundColor: '#00a651', color: 'white', fontWeight: 'bold'};
-        if (params.value === 'Playable') return {backgroundColor: '#A9DFBF', color: 'black', fontWeight: 'bold'};
-        if (params.value === 'Lean') return {backgroundColor: '#FCF3CF', color: 'black', fontWeight: 'bold'};
-        if (params.value === 'Pass') return {backgroundColor: '#EEEEEE', color: '#666666'};
+        if (params.value === 'Strong Play') {
+            return {
+                backgroundColor: '#00a651',
+                color: 'white',
+                fontWeight: 'bold'
+            };
+        }
+
+        if (params.value === 'Playable') {
+            return {
+                backgroundColor: '#A9DFBF',
+                color: 'black',
+                fontWeight: 'bold'
+            };
+        }
+
+        if (params.value === 'Lean') {
+            return {
+                backgroundColor: '#FCF3CF',
+                color: 'black',
+                fontWeight: 'bold'
+            };
+        }
+
+        if (params.value === 'Pass') {
+            return {
+                backgroundColor: '#EEEEEE',
+                color: '#666666'
+            };
+        }
+
         return {};
     }
     """)
 
     odds_style = JsCode("""
     function(params) {
-        let val = parseFloat(String(params.value).replace('+','').trim());
-        if (isNaN(val)) return {};
-        if (val > 0) return {backgroundColor: '#EBF5FB', color: '#154360', fontWeight: 'bold'};
-        if (val < 0) return {backgroundColor: '#FDEDEC', color: '#922B21', fontWeight: 'bold'};
+        if (params.value > 0) {
+            return {
+                backgroundColor: '#EBF5FB',
+                color: '#154360',
+                fontWeight: 'bold'
+            };
+        }
+
+        if (params.value < 0) {
+            return {
+                backgroundColor: '#FDEDEC',
+                color: '#922B21',
+                fontWeight: 'bold'
+            };
+        }
+
         return {};
     }
     """)
@@ -246,9 +343,18 @@ def show_grid(df, height=825):
     function(params) {
         let pick = params.data["Model Pick"];
         let sharp = params.data["Sharp Dog"];
-        if (pick && sharp && pick !== "PASS" && String(pick).trim().toUpperCase() === String(sharp).trim().toUpperCase()) {
-            return {backgroundColor: '#EEF7FF'};
+
+        if (
+            pick &&
+            sharp &&
+            pick !== "PASS" &&
+            String(pick).trim().toUpperCase() === String(sharp).trim().toUpperCase()
+        ) {
+            return {
+                backgroundColor: '#EEF7FF'
+            };
         }
+
         return {};
     }
     """)
@@ -259,28 +365,60 @@ def show_grid(df, height=825):
 
     for col in ["EV Away", "EV Home", "Pick EV"]:
         if col in display_df.columns:
-            gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=ev_style)
+            gb.configure_column(
+                col,
+                width=115,
+                type=["numericColumn"],
+                cellStyle=ev_style
+            )
 
     for col in ["Diff Away", "Diff Home", "Pick Diff"]:
         if col in display_df.columns:
-            gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=diff_style)
+            gb.configure_column(
+                col,
+                width=115,
+                type=["numericColumn"],
+                cellStyle=diff_style
+            )
 
     for col in ["Away Odds", "Home Odds", "Pick Odds"]:
         if col in display_df.columns:
-            gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=odds_style)
+            gb.configure_column(
+                col,
+                width=115,
+                type=["numericColumn"],
+                cellStyle=odds_style
+            )
 
     if "Sharp Dog" in display_df.columns:
-        gb.configure_column("Sharp Dog", width=125, cellStyle=sharp_style)
+        gb.configure_column(
+            "Sharp Dog",
+            width=125,
+            cellStyle=sharp_style
+        )
 
     if "Model Pick" in display_df.columns:
-        gb.configure_column("Model Pick", pinned="right", width=140, cellStyle=pick_style)
+        gb.configure_column(
+            "Model Pick",
+            pinned="right",
+            width=140,
+            cellStyle=pick_style
+        )
 
     if "Grade" in display_df.columns:
-        gb.configure_column("Grade", pinned="right", width=120, cellStyle=grade_style)
+        gb.configure_column(
+            "Grade",
+            pinned="right",
+            width=120,
+            cellStyle=grade_style
+        )
 
     for col in ["Sharp Away", "Sharp Home", "Vegas Win Away", "Vegas Win Home", "My Win Away", "My Win Home"]:
         if col in display_df.columns:
-            gb.configure_column(col, width=125)
+            gb.configure_column(
+                col,
+                width=125
+            )
 
     grid_options = gb.build()
     grid_options["getRowStyle"] = signal_row_style
@@ -331,7 +469,6 @@ if missing:
     st.write(list(df.columns))
     st.stop()
 
-# Clean out any empty rows below the true data payload
 df = df[df["Away Team"].astype(str).str.strip() != ""].copy().reset_index(drop=True)
 
 
@@ -359,30 +496,37 @@ df["Grade"] = df.apply(
 
 model_plays = df[df["Model Pick"] != "PASS"].copy()
 
-top_plays = pd.DataFrame()
-if not model_plays.empty:
-    top_plays = model_plays.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False]).head(5)
+top_plays = model_plays.sort_values(
+    by=["Pick EV", "Pick Diff"],
+    ascending=[False, False]
+).head(5)
 
-sharp_dogs = df[df["Sharp Dog"].astype(str).str.strip() != ""].copy()
-if not sharp_dogs.empty:
-    sharp_dogs = sharp_dogs.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
+sharp_dogs = df[
+    df["Sharp Dog"].astype(str).str.strip() != ""
+].copy().sort_values(
+    by=["Pick EV", "Pick Diff"],
+    ascending=[False, False]
+)
 
-model_dogs = pd.DataFrame()
-if not model_plays.empty:
-    model_dogs = model_plays[model_plays.apply(lambda r: is_dog(r["Pick Odds"]), axis=1)].copy()
-    if not model_dogs.empty:
-        model_dogs = model_dogs.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
+model_dogs = model_plays[
+    model_plays.apply(lambda r: is_dog(r["Pick Odds"]), axis=1)
+].copy().sort_values(
+    by=["Pick EV", "Pick Diff"],
+    ascending=[False, False]
+)
 
-signals = pd.DataFrame()
-if not model_plays.empty:
-    signals = model_plays[
-        model_plays.apply(
-            lambda r: (str(r["Sharp Dog"]).strip() != "" and normalize(r["Model Pick"]) == normalize(r["Sharp Dog"])),
-            axis=1
-        )
-    ].copy()
-    if not signals.empty:
-        signals = signals.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
+signals = model_plays[
+    model_plays.apply(
+        lambda r: (
+            str(r["Sharp Dog"]).strip() != ""
+            and normalize(r["Model Pick"]) == normalize(r["Sharp Dog"])
+        ),
+        axis=1
+    )
+].copy().sort_values(
+    by=["Pick EV", "Pick Diff"],
+    ascending=[False, False]
+)
 
 
 # ============================================================
@@ -414,6 +558,7 @@ with tab1:
 
 with tab2:
     st.subheader("Top 5 Model Plays")
+
     if top_plays.empty:
         st.info("No model plays found.")
     else:
@@ -421,6 +566,7 @@ with tab2:
 
 with tab3:
     st.subheader("Sharp Dogs Listed In Sheet")
+
     if sharp_dogs.empty:
         st.info("No sharp dogs listed.")
     else:
@@ -428,6 +574,7 @@ with tab3:
 
 with tab4:
     st.subheader("Model Underdog Plays")
+
     if model_dogs.empty:
         st.info("No model underdog plays found.")
     else:
@@ -435,6 +582,7 @@ with tab4:
 
 with tab5:
     st.subheader("Signal Plays")
+
     if signals.empty:
         st.info("No sharp/model alignment plays found.")
     else:
