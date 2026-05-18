@@ -130,7 +130,6 @@ def show_grid(df, height=825):
 
     gb = GridOptionsBuilder.from_dataframe(display_df)
 
-    # Base grid layouts
     gb.configure_default_column(
         resizable=True,
         sortable=True,
@@ -145,11 +144,6 @@ def show_grid(df, height=825):
         headerHeight=48,
         rowSelection="single"
     )
-
-    # --------------------------------------------------------
-    # STRICT HIGH-CONTRAST JAVASCRIPT STYLE BLOCKS
-    # --------------------------------------------------------
-    # Explicitly locks color to '#111111' or '#ffffff' for visibility
 
     base_text_style = {"color": "#111111", "fontWeight": "600"}
     team_text_style = {"color": "#111111", "fontWeight": "800"}
@@ -231,7 +225,6 @@ def show_grid(df, height=825):
     }
     """)
 
-    # Map validation targets with dark high-visibility text rules
     for col in ["EV Away", "EV Home", "Pick EV"]:
         if col in display_df.columns: gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=ev_style)
 
@@ -257,7 +250,7 @@ def show_grid(df, height=825):
         height=height,
         fit_columns_on_grid_load=False,
         allow_unsafe_jscode=True,
-        theme="balham",  # Reverted to clean light matrix sheet to guarantee contrast visibility
+        theme="balham",
         enable_enterprise_modules=False,
     )
 
@@ -381,7 +374,7 @@ with tab0:
 
 with tab1:
     st.subheader("All Boarded Formations")
-    show_grid(df, height=800)
+    show_grid(df, height=850)
 
 with tab2:
     st.subheader("Top 5 Premium System Plays")
@@ -390,8 +383,58 @@ with tab2:
 
 with tab3:
     st.subheader("Sharp Syndicate Underdog Targets")
-    if sharp_dogs.empty: st.info("No sharp dogs listed.")
-    else: show_grid(sharp_dogs, height=850)
+    if sharp_dogs.empty:
+        st.info("No sharp dogs listed.")
+    else:
+        # Render the AgGrid data table first
+        show_grid(sharp_dogs, height=450)
+        
+        # Inject dynamic backend narrative analysis directly below the sheet visualization
+        st.write("---")
+        st.markdown("### 🔍 Live Sharp Dog Market Analysis")
+        
+        for idx, row in sharp_dogs.iterrows():
+            dog_team = str(row["Sharp Dog"]).strip()
+            is_away = (normalize(row["Away Team"]) == normalize(dog_team))
+            
+            # Identify the opponent and line pricing
+            opp_team = row["Home Team"] if is_away else row["Away Team"]
+            dog_odds = row["Away Odds"] if is_away else row["Home Odds"]
+            
+            # Extract calculations
+            my_win = to_num(row["My Win Away"] if is_away else row["My Win Home"])
+            v_win = to_num(row["Vegas Win Away"] if is_away else row["Vegas Win Home"])
+            ev_val = to_num(row["EV Away"] if is_away else row["EV Home"])
+            diff_val = to_num(row["Diff Away"] if is_away else row["Diff Home"])
+            
+            # Pull raw delta movement tracking
+            move_val = to_num(row["Sharp Away"] if is_away else row["Sharp Home"])
+            
+            st.markdown(f"#### 🐶 {dog_team} vs {opp_team} ({dog_odds})")
+            
+            # Contextual bullet generator based on live sheet variables
+            analysis_bullets = []
+            
+            # 1. Analyze expected value efficiency
+            if ev_val > 0:
+                analysis_bullets.append(f"**Mathematical Edge:** The model clocks a positive Expected Value (**+{ev_val}**) on this line. Sharps are targeting a pricing discrepancy where the payout profile outweighs the calculated risk.")
+            else:
+                analysis_bullets.append(f"**Price Action Play:** Internal EV sits at **{ev_val}**, suggesting sharps are capitalizing on a pure market sentiment angle or reactive line defense rather than raw analytical margin.")
+                
+            # 2. Analyze probability delta splits
+            if diff_val > 0:
+                analysis_bullets.append(f"**Probability Gap:** Your framework projects a **{my_win}%** true win probability versus the market's implied baseline of **{v_win}%** (a clear **+{diff_val}%** raw model split). Professional syndicates are exposing capital here because they project this team wins at a higher frequency than the book's current pricing implies.")
+            else:
+                analysis_bullets.append(f"**Implied Hold:** The win percentage differential stands at **{diff_val}%**, meaning sharps are stepping in to protect against an overly inflated favorite line driven by one-sided retail or public risk liability.")
+                
+            # 3. Analyze visible volume / direction tracking indicators
+            if move_val != 0:
+                direction = "upward accumulation" if move_val > 0 else "downward line defense"
+                analysis_bullets.append(f"**Volume Signature:** The sheet logs a **{move_val}%** line delta on this position. This confirms active, heavy underlying betting limits moving through the market that correspond with professional risk positioning.")
+                
+            # Print execution breakdown cleanly
+            for bullet in analysis_bullets:
+                st.markdown(f"* {bullet}")
 
 with tab4:
     st.subheader("Model Edge Underdog Formations")
