@@ -302,7 +302,7 @@ if not model_plays.empty:
 
 sharp_dogs = df[df["Sharp Dog"].astype(str).str.strip() != ""].copy()
 if not sharp_dogs.empty:
-    sharp_dogs = sharp_values = sharp_dogs.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
+    sharp_dogs = sharp_dogs.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
 
 model_dogs = pd.DataFrame()
 if not model_plays.empty:
@@ -336,7 +336,7 @@ c3.metric("Tracked Sharp Dogs", len(sharp_dogs))
 c4.metric("Model Underdogs", len(model_dogs))
 c5.metric("System Confluence Signals", len(signals))
 
-# Tabs layout with 'How to Read' at the final position
+# Clean layout with data up front and operational guide at the end index
 tab1, tab2, tab3, tab4, tab5, tab0 = st.tabs([
     "All Games", "Top 5 Plays", "Sharp Dogs", "Model Dogs", "Signal Plays", "📖 How to Read"
 ])
@@ -352,59 +352,8 @@ with tab2:
 
 with tab3:
     st.subheader("Sharp Syndicate Underdog Targets")
-    if sharp_dogs.empty:
-        st.info("No sharp dogs listed.")
-    else:
-        show_grid(sharp_dogs, height=400)
-        st.write("---")
-        st.markdown("### 🛠️ Interrogating the Sharp Number Placement")
-        
-        for idx, row in sharp_dogs.iterrows():
-            dog_team = str(row["Sharp Dog"]).strip()
-            is_away = (normalize(row["Away Team"]) == normalize(dog_team))
-            
-            opp_team = row["Home Team"] if is_away else row["Away Team"]
-            dog_odds = row["Away Odds"] if is_away else row["Home Odds"]
-            
-            my_win = to_num(row["My Win Away"] if is_away else row["My Win Home"])
-            v_win = to_num(row["Vegas Win Away"] if is_away else row["Vegas Win Home"])
-            ev_val = to_num(row["EV Away"] if is_away else row["EV Home"])
-            diff_val = to_num(row["Diff Away"] if is_away else row["Diff Home"])
-            move_val = to_num(row["Sharp Away"] if is_away else row["Sharp Home"])
-            model_pick = str(row["Model Pick"]).strip()
-            
-            with st.container():
-                st.markdown(f"#### 🔍 **{dog_team}** vs {opp_team} ({dog_odds})")
-                
-                # --- CASE 1: CONFLUENCE ALIGNMENT (Model matches Sharp Dog) ---
-                if normalize(model_pick) == normalize(dog_team):
-                    st.success(
-                        f"🎯 **SYSTEM CONFLUENCE:** Both your model analytics and active smart money are hammering this exact number. "
-                        f"Your framework projects a **{my_win}%** true win probability against the bookmaker's implied break-even threshold of **{v_win}%**. "
-                        f"Because you hold a raw mathematically backed edge of **+{diff_val}%** coupled with an EV of **+{ev_val}**, sharps are exposed here "
-                        f"simply because the payout return significantly outpaces the physical probability of the event. This is a high-conviction value buy."
-                    )
-                
-                # --- CASE 2: SHARPS BUYING A DOG THAT YOUR MODEL PASSES ON ---
-                elif model_pick == "PASS":
-                    st.info(
-                        f"⚠️ **PURE PRICE METRIC / ASSET DISCOUNT:** Your personal model parameters filtered this game out as a baseline 'PASS'. "
-                        f"However, professional groups are moving this specific line (Current Tracked Delta: **{move_val}%**). "
-                        f"Why are they on it when your baseline numbers passed? Sharps aren't necessarily expecting a direct victory; they are taking advantage of a "
-                        f"forced public inflation loop. Public retail accounts are flooding the book to back {opp_team}, forcing oddsmakers to artificially increase "
-                        f"the payout on {dog_team} to manage liability. Sharps are stepping in because the price has been pushed past its efficient mathematical limit."
-                    )
-                
-                # --- CASE 3: SHARPS ON THE DOG, BUT YOUR MODEL SAYS BACK THE FAVORITE ---
-                else:
-                    st.error(
-                        f"🚨 **DIVERGENT DISCREPANCY WARNING:** Your model has calculated a strict execution trigger to back the favorite (**{model_pick}**), "
-                        f"but tracking metrics show smart money syndicates are exposing risk capital to the underdog (**{dog_team}**). "
-                        f"If the line is aggressively drifting wider (e.g. from +120 up to +135) and sharps are *still* stepping in, they are capturing "
-                        f"maximum line value on micro-matchup anomalies (like customized umpire trends or specific high-spin pitching splits) that your high-level numbers are missing. "
-                        f"Check if there is a late line drift before risking capital against sharp exposure."
-                    )
-                st.write("")
+    if sharp_dogs.empty: st.info("No sharp dogs listed.")
+    else: show_grid(sharp_dogs, height=850)
 
 with tab4:
     st.subheader("Model Edge Underdog Formations")
