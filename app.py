@@ -21,7 +21,6 @@ URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sh
 
 EV_THRESHOLD = 5
 DIFF_THRESHOLD = 5
-HIGH_EV_THRESHOLD = 10
 
 
 # ============================================================
@@ -64,21 +63,6 @@ def is_dog(odds):
     return to_num(odds) > 0
 
 
-def edge_tier(ev):
-    ev = to_num(ev)
-
-    if ev >= 20:
-        return "🟢 Elite Edge"
-    if ev >= 15:
-        return "🔵 Strong Edge"
-    if ev >= 10:
-        return "🟡 Value Edge"
-    if ev >= 5:
-        return "⚪ Small Edge"
-
-    return "No Edge"
-
-
 def get_pick(row):
     away_ev = to_num(row["EV Away"])
     home_ev = to_num(row["EV Home"])
@@ -112,31 +96,10 @@ def grade_play(ev, diff):
     return "Pass"
 
 
-def sharp_read(row):
-    pick = row["Model Pick"]
-    sharp_dog = str(row["Sharp Dog"]).strip()
-
-    if pick == "PASS":
-        return "No model pick."
-
-    if sharp_dog == "":
-        return "No sharp dog listed."
-
-    if normalize(pick) == normalize(sharp_dog):
-        return "Sharp side and model pick are aligned."
-
-    return f"Sharp side points to {sharp_dog}, while the model points to {pick}. Conflict spot."
-
-
-# ============================================================
-# COLOR CODING
-# ============================================================
-
 def color_board(row):
     styles = [""] * len(row)
     col = {c: i for i, c in enumerate(row.index)}
 
-    # EV columns
     for c in ["EV Away", "EV Home", "Pick EV"]:
         if c in col:
             val = to_num(row[c])
@@ -150,7 +113,6 @@ def color_board(row):
             elif val < 0:
                 styles[col[c]] = "background-color:#f5b7b1;color:black;"
 
-    # Diff columns
     for c in ["Diff Away", "Diff Home", "Pick Diff"]:
         if c in col:
             val = to_num(row[c])
@@ -162,14 +124,12 @@ def color_board(row):
             elif val <= -10:
                 styles[col[c]] = "background-color:#f5b7b1;color:black;"
 
-    # Model Pick
     if "Model Pick" in col:
         if row["Model Pick"] != "PASS":
             styles[col["Model Pick"]] = "background-color:#1e8449;color:white;font-weight:bold;"
         else:
             styles[col["Model Pick"]] = "background-color:#eeeeee;color:#777;"
 
-    # Grade
     if "Grade" in col:
         if row["Grade"] == "Strong Play":
             styles[col["Grade"]] = "background-color:#00a651;color:white;font-weight:bold;"
@@ -180,16 +140,14 @@ def color_board(row):
         else:
             styles[col["Grade"]] = "background-color:#eeeeee;color:#777;"
 
-    # Sharp Dog
-    if "Sharp Dog" in col:
-        if str(row["Sharp Dog"]).strip() != "":
-            styles[col["Sharp Dog"]] = "background-color:#d6eaf8;color:#154360;font-weight:bold;"
+    if "Sharp Dog" in col and str(row["Sharp Dog"]).strip() != "":
+        styles[col["Sharp Dog"]] = "background-color:#d6eaf8;color:#154360;font-weight:bold;"
 
-    # Signal row: model pick matches sharp dog
     if (
         "Model Pick" in row.index
         and "Sharp Dog" in row.index
         and row["Model Pick"] != "PASS"
+        and str(row["Sharp Dog"]).strip() != ""
         and normalize(row["Model Pick"]) == normalize(row["Sharp Dog"])
     ):
         for i in range(len(styles)):
@@ -197,106 +155,6 @@ def color_board(row):
                 styles[i] = "background-color:#eef7ff;"
 
     return styles
-
-
-# ============================================================
-# WRITEUPS
-# ============================================================
-
-def writeup(row):
-    if row["Model Pick"] == "PASS":
-        return f"""
-### {row['Away Team']} @ {row['Home Team']}
-
-**PASS**
-
-No clean model edge. Neither side meets both thresholds:
-
-- EV > {EV_THRESHOLD}
-- Diff >= {DIFF_THRESHOLD}
-
-This is a skip unless you have outside matchup information that strongly changes the read.
-"""
-
-    pick = row["Model Pick"]
-    side = row["Pick Side"]
-    odds = row["Pick Odds"]
-    ev = row["Pick EV"]
-    diff = row["Pick Diff"]
-    grade = row["Grade"]
-    sharp_dog = str(row["Sharp Dog"]).strip()
-
-    if side == "Away":
-        opponent = row["Home Team"]
-        win_pct = row["My Win Away"]
-        vegas_pct = row["Vegas Win Away"]
-        sharp_ml = row["Sharp Away"]
-        opponent_ev = row["EV Home"]
-        opponent_diff = row["Diff Home"]
-    else:
-        opponent = row["Away Team"]
-        win_pct = row["My Win Home"]
-        vegas_pct = row["Vegas Win Home"]
-        sharp_ml = row["Sharp Home"]
-        opponent_ev = row["EV Away"]
-        opponent_diff = row["Diff Away"]
-
-    dog_note = "underdog value play" if is_dog(odds) else "favorite value play"
-
-    return f"""
-### {row['Away Team']} @ {row['Home Team']}
-
-## Pick: {pick} ML ({odds})
-
-**Grade:** {grade}  
-**Type:** {dog_note}  
-**Tier:** {edge_tier(ev)}
-
----
-
-### Model vs Market
-
-- Model Win %: **{win_pct}**
-- Vegas Win %: **{vegas_pct}**
-- Difference: **{diff:.2f}%**
-- Expected Value: **{ev:.2f}**
-- Opponent EV: **{opponent_ev}**
-- Opponent Diff: **{opponent_diff}**
-
----
-
-### Why This Is a Play
-
-Your sheet is showing value on **{pick}** because that side clears your minimum requirements:
-
-- EV is above **{EV_THRESHOLD}**
-- Diff is at least **{DIFF_THRESHOLD}**
-- The opposing side does not grade better by your model
-
-Against **{opponent}**, this is not just a “who wins” pick. It is a pricing play. Your numbers suggest the market is not fully accounting for the win probability your model gives to **{pick}**.
-
----
-
-### Sharp / Market Read
-
-- Sharp Dog: **{sharp_dog if sharp_dog else "None"}**
-- Pick Sharp ML: **{sharp_ml}**
-- Read: **{sharp_read(row)}**
-
-If the sharp dog agrees with your model pick, confidence improves.  
-If the sharp dog conflicts with your model pick, this becomes a caution spot even if EV is positive.
-
----
-
-### Final Read
-
-This qualifies as a **{grade}**.
-
-Best use:
-- Straight bet first
-- Smaller sizing if sharp data conflicts
-- Be careful using it as a parlay leg if the price is heavy
-"""
 
 
 # ============================================================
@@ -334,7 +192,7 @@ if missing:
     st.write(list(df.columns))
     st.stop()
 
-df = df[df["Away Team"].astype(str).str.strip() != ""].copy()
+df = df[df["Away Team"].astype(str).str.strip() != ""].copy().reset_index(drop=True)
 
 
 # ============================================================
@@ -354,6 +212,33 @@ df["Grade"] = df.apply(
     axis=1
 )
 
+# Cleaner display order
+display_cols = [
+    "Away Team",
+    "Home Team",
+    "Away Odds",
+    "Home Odds",
+    "Sharp Away",
+    "Sharp Home",
+    "Sharp Dog",
+    "Vegas Win Away",
+    "Vegas Win Home",
+    "My Win Away",
+    "My Win Home",
+    "Diff Away",
+    "Diff Home",
+    "EV Away",
+    "EV Home",
+    "Model Pick",
+    "Pick Side",
+    "Pick Odds",
+    "Pick EV",
+    "Pick Diff",
+    "Grade",
+]
+
+display_cols = [c for c in display_cols if c in df.columns]
+
 model_plays = df[df["Model Pick"] != "PASS"].copy()
 
 top_plays = model_plays.sort_values(
@@ -361,7 +246,18 @@ top_plays = model_plays.sort_values(
     ascending=[False, False]
 ).head(5)
 
-dogs = model_plays[
+# FIXED: this now uses the actual Sharp Dog column from your sheet
+sharp_dogs = df[
+    df["Sharp Dog"].astype(str).str.strip() != ""
+].copy()
+
+sharp_dogs = sharp_dogs.sort_values(
+    by=["Pick EV", "Pick Diff"],
+    ascending=[False, False]
+)
+
+# Model underdogs only
+model_dogs = model_plays[
     model_plays.apply(lambda r: is_dog(r["Pick Odds"]), axis=1)
 ].sort_values(
     by=["Pick EV", "Pick Diff"],
@@ -370,7 +266,10 @@ dogs = model_plays[
 
 signals = model_plays[
     model_plays.apply(
-        lambda r: normalize(r["Model Pick"]) == normalize(r["Sharp Dog"]),
+        lambda r: (
+            str(r["Sharp Dog"]).strip() != ""
+            and normalize(r["Model Pick"]) == normalize(r["Sharp Dog"])
+        ),
         axis=1
     )
 ].sort_values(
@@ -386,28 +285,32 @@ signals = model_plays[
 st.title("⚾ MLB Command Center")
 st.caption("Reading directly from APP_EXPORT")
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 
 c1.metric("Games", len(df))
 c2.metric("Model Plays", len(model_plays))
-c3.metric("Underdogs", len(dogs))
-c4.metric("Signal Plays", len(signals))
+c3.metric("Sharp Dogs", len(sharp_dogs))
+c4.metric("Model Dogs", len(model_dogs))
+c5.metric("Signal Plays", len(signals))
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "All Games",
     "Top 5 Plays",
-    "Underdogs",
-    "Signal Plays",
-    "Writeups",
-    "Sharp Reads"
+    "Sharp Dogs",
+    "Model Underdogs",
+    "Signal Plays"
 ])
+
+TABLE_HEIGHT = 850
 
 with tab1:
     st.subheader("All Games")
+
     st.dataframe(
-        df.style.apply(color_board, axis=1),
+        df[display_cols].style.apply(color_board, axis=1),
         use_container_width=True,
-        hide_index=True
+        hide_index=True,
+        height=TABLE_HEIGHT
     )
 
 with tab2:
@@ -417,60 +320,47 @@ with tab2:
         st.info("No model plays found.")
     else:
         st.dataframe(
-            top_plays.style.apply(color_board, axis=1),
+            top_plays[display_cols].style.apply(color_board, axis=1),
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
+            height=TABLE_HEIGHT
         )
 
 with tab3:
-    st.subheader("Underdog Plays")
+    st.subheader("Sharp Dogs Listed In Sheet")
 
-    if dogs.empty:
-        st.info("No underdog plays found.")
+    if sharp_dogs.empty:
+        st.info("No sharp dogs listed.")
     else:
         st.dataframe(
-            dogs.style.apply(color_board, axis=1),
+            sharp_dogs[display_cols].style.apply(color_board, axis=1),
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
+            height=TABLE_HEIGHT
         )
 
 with tab4:
+    st.subheader("Model Underdog Plays")
+
+    if model_dogs.empty:
+        st.info("No model underdog plays found.")
+    else:
+        st.dataframe(
+            model_dogs[display_cols].style.apply(color_board, axis=1),
+            use_container_width=True,
+            hide_index=True,
+            height=TABLE_HEIGHT
+        )
+
+with tab5:
     st.subheader("Signal Plays")
 
     if signals.empty:
         st.info("No sharp/model alignment plays found.")
     else:
         st.dataframe(
-            signals.style.apply(color_board, axis=1),
+            signals[display_cols].style.apply(color_board, axis=1),
             use_container_width=True,
-            hide_index=True
-        )
-
-with tab5:
-    st.subheader("Writeups")
-
-    if model_plays.empty:
-        st.info("No model plays to write up.")
-    else:
-        for _, row in model_plays.sort_values(by="Pick EV", ascending=False).iterrows():
-            st.markdown(writeup(row))
-            st.divider()
-
-with tab6:
-    st.subheader("Sharp Reads")
-
-    for _, row in df.iterrows():
-        if str(row["Sharp Dog"]).strip() == "":
-            continue
-
-        st.markdown(
-            f"""
-### {row['Away Team']} @ {row['Home Team']}
-
-**Sharp Dog:** {row['Sharp Dog']}  
-**Model Pick:** {row['Model Pick']}  
-**Read:** {sharp_read(row)}
-
----
-"""
+            hide_index=True,
+            height=TABLE_HEIGHT
         )
