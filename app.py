@@ -15,7 +15,7 @@ st.set_page_config(
 st.markdown("""
     <style>
         .block-container { padding-top: 1.5rem; padding-bottom: 1.5rem; }
-        h1 { font-weight: 900 !important; color: #111111 !important; letter-spacing: -1.5px; }
+        h1 { font-weight: 900 !important; color: #111111 !important; letter-spacing: -1px; }
         h3 { font-weight: 700 !important; color: #2C3E50 !important; }
         
         /* Metric Block Custom Styling */
@@ -75,7 +75,7 @@ SHEET_ID = "1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0"
 SHEET_NAME = "APP_EXPORT"
 URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}&skiprows=1"
 
-@st.cache_data(ttl=15) # Optimized aggressive cache refresh cycle
+@st.cache_data(ttl=15)
 def load_and_sanitize_market_data():
     try:
         raw_df = pd.read_csv(URL)
@@ -109,23 +109,20 @@ def evaluate_tactical_side(row, ev_limit, diff_limit):
 
 
 # ============================================================
-# CONSOLE STATE ENGINE (ROW CLICKS INITIALIZATION)
-# ============================================================
-if "selected_matchup_key" not in st.session_state:
-    st.session_state["selected_matchup_key"] = None
-
-
-# ============================================================
 # COMPILING WORKSPACE DATASETS
 # ============================================================
 base_df = load_and_sanitize_market_data()
 if base_df.empty: st.stop()
 
-# Ensure critical nodes exist before parsing matrix
-required_nodes = ["Away Team", "Home Team", "Away Odds", "Home Odds", "EV Away", "EV Home", "Diff Away", "Diff Home"]
+# Explicitly verified nodes against image_eb6ba4.png mapping structural integrity
+required_nodes = [
+    "Away Team", "Home Team", "Away Odds", "Home Odds", "Sharp Away", "Sharp Home", "Sharp Dog",
+    "Vegas Win Away", "Vegas Win Home", "My Win Away", "My Win Home", "Diff Away", "Diff Home", 
+    "EV Away", "EV Home", "O/U", "Over", "% O/U", "Sharps Totals Away"
+]
 missing_nodes = [n for n in required_nodes if n not in base_df.columns]
 if missing_nodes:
-    st.error(f"❌ Aborting. Data node signature layout altered: Missing {missing_nodes}")
+    st.error(f"❌ Aborting. Column signature mismatch. Missing nodes: {missing_nodes}")
     st.stop()
 
 # Strip metadata rows safely
@@ -151,14 +148,20 @@ base_df["Grade"] = base_df.apply(assign_tier_grade, axis=1)
 # ============================================================
 # HIGH-PERFORMANCE GRID COMPILER ENGINE
 # ============================================================
-def compile_interactive_grid(target_df, grid_height=450):
-    display_cols = [
-        "Away Team", "Home Team", "Away Odds", "Home Odds", "Sharp Away",
-        "Sharp Home", "Sharp Dog", "Vegas Win Away", "Vegas Win Home",
-        "My Win Away", "My Win Home", "Diff Away", "Diff Home", "EV Away",
-        "EV Home", "Model Pick", "Pick Side", "Pick Odds", "Pick EV",
-        "Pick Diff", "Grade"
-    ]
+def compile_interactive_grid(target_df, mode="sides", grid_height=450):
+    if mode == "totals":
+        display_cols = [
+            "Away Team", "Home Team", "O/U", "Over", "% O/U", "Sharps Totals Away"
+        ]
+    else:
+        display_cols = [
+            "Away Team", "Home Team", "Away Odds", "Home Odds", "Sharp Away",
+            "Sharp Home", "Sharp Dog", "Vegas Win Away", "Vegas Win Home",
+            "My Win Away", "My Win Home", "Diff Away", "Diff Home", "EV Away",
+            "EV Home", "Model Pick", "Pick Side", "Pick Odds", "Pick EV",
+            "Pick Diff", "Grade"
+        ]
+        
     valid_cols = [c for c in display_cols if c in target_df.columns]
     working_df = target_df[valid_cols].copy()
 
@@ -166,20 +169,46 @@ def compile_interactive_grid(target_df, grid_height=450):
     gb.configure_default_column(resizable=True, sortable=True, filter=True, minWidth=115)
     gb.configure_grid_options(rowHeight=38, headerHeight=42, rowSelection="single")
 
-    # Static Fixed Pins
+    # Static Fixed Pins for Teams
     gb.configure_column("Away Team", pinned="left", width=130, cellStyle={"fontWeight": "800", "color": "#111111"})
     gb.configure_column("Home Team", pinned="left", width=130, cellStyle={"fontWeight": "800", "color": "#111111"})
-    gb.configure_column("Model Pick", pinned="right", width=130, cellStyle=JsCode("""
-        function(p) { return p.value === 'PASS' ? {backgroundColor: '#EBEDEF', color: '#7F8C8D'} : {backgroundColor: '#27AE60', color: '#ffffff', fontWeight: '900', textAlign: 'center'}; }
-    """))
-    gb.configure_column("Grade", pinned="right", width=115, cellStyle=JsCode("""
-        function(p) {
-            if (p.value === 'Strong Play') return {backgroundColor: '#1E8449', color: '#ffffff', fontWeight: 'bold'};
-            if (p.value === 'Playable') return {backgroundColor: '#2ECC71', color: '#111111'};
-            if (p.value === 'Lean') return {backgroundColor: '#F1C40F', color: '#111111'};
-            return {backgroundColor: '#EBEDEF', color: '#7F8C8D'};
-        }
-    """))
+    
+    if mode == "totals":
+        gb.configure_column("O/U", width=100, cellStyle={"fontWeight": "700", "textAlign": "center"})
+        gb.configure_column("Over", width=110, cellStyle=JsCode("""
+            function(p) {
+                if (p.value === 'OVER') return {backgroundColor: '#D4EFDF', color: '#196F3D', fontWeight: 'bold', textAlign: 'center'};
+                if (p.value === 'UNDER') return {backgroundColor: '#FADBD8', color: '#78281F', fontWeight: 'bold', textAlign: 'center'};
+                return {textAlign: 'center'};
+            }
+        """))
+        gb.configure_column("% O/U", cellStyle=JsCode("""
+            function(p) {
+                let v = parseFloat(String(p.value).replace('%','').trim());
+                if(isNaN(v)) return {};
+                if(v >= 60) return {backgroundColor: '#FCF3CF', color: '#7D6608', fontWeight: 'bold'};
+                return {};
+            }
+        """))
+        gb.configure_column("Sharps Totals Away", cellStyle=JsCode("""
+            function(p) {
+                let v = parseFloat(String(p.value).replace('%','').trim());
+                if(isNaN(v)) return {};
+                return v > 0 ? {backgroundColor: '#E8F8F5', color: '#117A65', fontWeight: '700'} : {backgroundColor: '#FBEEF8', color: '#884EA0', fontWeight: '700'};
+            }
+        """))
+    else:
+        gb.configure_column("Model Pick", pinned="right", width=130, cellStyle=JsCode("""
+            function(p) { return p.value === 'PASS' ? {backgroundColor: '#EBEDEF', color: '#7F8C8D'} : {backgroundColor: '#27AE60', color: '#ffffff', fontWeight: '900', textAlign: 'center'}; }
+        """))
+        gb.configure_column("Grade", pinned="right", width=115, cellStyle=JsCode("""
+            function(p) {
+                if (p.value === 'Strong Play') return {backgroundColor: '#1E8449', color: '#ffffff', fontWeight: 'bold'};
+                if (p.value === 'Playable') return {backgroundColor: '#2ECC71', color: '#111111'};
+                if (p.value === 'Lean') return {backgroundColor: '#F1C40F', color: '#111111'};
+                return {backgroundColor: '#EBEDEF', color: '#7F8C8D'};
+            }
+        """))
 
     # Advanced Micro-Format Layer Conditional Style Scripts
     ev_format_script = JsCode("""
@@ -201,15 +230,14 @@ def compile_interactive_grid(target_df, grid_height=450):
         }
     """)
 
-    for ev_col in ["EV Away", "EV Home", "Pick EV"]:
-        if ev_col in working_df.columns: gb.configure_column(ev_col, cellStyle=ev_format_script)
-    for odds_col in ["Away Odds", "Home Odds", "Pick Odds"]:
-        if odds_col in working_df.columns: gb.configure_column(odds_col, cellStyle=odds_format_script)
+    if mode != "totals":
+        for ev_col in ["EV Away", "EV Home", "Pick EV"]:
+            if ev_col in working_df.columns: gb.configure_column(ev_col, cellStyle=ev_format_script)
+        for odds_col in ["Away Odds", "Home Odds", "Pick Odds"]:
+            if odds_col in working_df.columns: gb.configure_column(odds_col, cellStyle=odds_format_script)
 
-    # Compile Configuration Map
     g_options = gb.build()
     
-    # Render Application Frame
     response = AgGrid(
         working_df,
         gridOptions=g_options,
@@ -249,27 +277,31 @@ st.write("---")
 st.markdown("### 🖥️ Live Node Telemetry")
 st.markdown("<small>Select any row inside the data grids below to instantly lock and track that specific match variable array.</small>", unsafe_allow_html=True)
 
-# Container panel that updates when user targets table rows
 monitor_anchor = st.empty()
 
-# Render Application Tab Routers
-tab_all, tab_premium, tab_sharps, tab_confluence, tab_guide = st.tabs([
-    "All Games Matrix", "Top System Plays", "Sharp Money Tracker", "System Confluence Signals", "📖 System Logic Guide"
+tab_all, tab_ou, tab_premium, tab_sharps, tab_confluence, tab_guide = st.tabs([
+    "All Games Matrix", "Over/Under Matrix", "Top System Plays", "Sharp Money Tracker", "System Confluence Signals", "📖 System Logic Guide"
 ])
 
 selected_row_data = None
 
 with tab_all:
     st.markdown("### Master Active Board")
-    grid_response = compile_interactive_grid(base_df, grid_height=500)
+    grid_response = compile_interactive_grid(base_df, mode="sides", grid_height=500)
     if grid_response.selected_rows is not None and not grid_response.selected_rows.empty:
         selected_row_data = grid_response.selected_rows.iloc[0].to_dict()
+
+with tab_ou:
+    st.markdown("### Model & Sharp Over/Under Projections")
+    ou_grid_response = compile_interactive_grid(base_df, mode="totals", grid_height=500)
+    if ou_grid_response.selected_rows is not None and not ou_grid_response.selected_rows.empty:
+        selected_row_data = ou_grid_response.selected_rows.iloc[0].to_dict()
 
 with tab_premium:
     st.markdown("### Premium Algorithmic Formations")
     if not active_execution_plays.empty:
         top_premium = active_execution_plays.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False]).head(5)
-        premium_grid_response = compile_interactive_grid(top_premium, grid_height=300)
+        premium_grid_response = compile_interactive_grid(top_premium, mode="sides", grid_height=300)
         if premium_grid_response.selected_rows is not None and not premium_grid_response.selected_rows.empty:
             selected_row_data = premium_grid_response.selected_rows.iloc[0].to_dict()
     else:
@@ -279,7 +311,7 @@ with tab_sharps:
     st.markdown("### Tracked Sharp Syndicate Placements")
     if not sharp_money_nodes.empty:
         sharp_sorted = sharp_money_nodes.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
-        sharp_grid_response = compile_interactive_grid(sharp_sorted, grid_height=350)
+        sharp_grid_response = compile_interactive_grid(sharp_sorted, mode="sides", grid_height=350)
         if sharp_grid_response.selected_rows is not None and not sharp_grid_response.selected_rows.empty:
             selected_row_data = sharp_grid_response.selected_rows.iloc[0].to_dict()
     else:
@@ -289,7 +321,7 @@ with tab_confluence:
     st.markdown("### Institutional Model Convergence Points")
     if not confluence_nodes.empty:
         confluence_sorted = confluence_nodes.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
-        conf_grid_response = compile_interactive_grid(confluence_sorted, grid_height=350)
+        conf_grid_response = compile_interactive_grid(confluence_sorted, mode="sides", grid_height=350)
         if conf_grid_response.selected_rows is not None and not conf_grid_response.selected_rows.empty:
             selected_row_data = conf_grid_response.selected_rows.iloc[0].to_dict()
     else:
@@ -313,7 +345,6 @@ with tab_guide:
 
 # Execute telemetry panel updates if row data has been selected
 if selected_row_data is not None:
-    # Safely convert data nodes
     t_away = selected_row_data.get("Away Team", "N/A")
     t_home = selected_row_data.get("Home Team", "N/A")
     v_win_away = selected_row_data.get("Vegas Win Away", "0%")
@@ -325,21 +356,32 @@ if selected_row_data is not None:
     p_pick = selected_row_data.get("Model Pick", "PASS")
     p_grade = selected_row_data.get("Grade", "Pass")
     s_dog = selected_row_data.get("Sharp Dog", "")
+    
+    # Precise schema assignments based on final sheet layout alignment
+    ou_line = selected_row_data.get("O/U", "N/A")
+    ou_side = selected_row_data.get("Over", "PASS")
+    ou_pct = selected_row_data.get("% O/U", "0%")
+    sharp_tot_a = selected_row_data.get("Sharps Totals Away", "0%")
 
     with monitor_anchor.container():
         st.markdown(f"""
         <div class="monitor-card">
             <h4>⚡ TRACKING METRIC ARRAY: {t_away} vs {t_home}</h4>
-            <table style="width:100%; border:none; font-family:monospace; font-size:14px; color:#2C3E50;">
+            <table style="width:100%; border:none; font-family:monospace; font-size:14px; color:#2C3E50; border-collapse: separate; border-spacing: 0 8px;">
                 <tr>
-                    <td><b>System Verdict:</b> <span style="color:#1E8449; font-weight:800;">{p_pick} ({p_grade})</span></td>
-                    <td><b>Calculated EV Edge:</b> {p_ev}</td>
-                    <td><b>Win Split Delta:</b> +{p_diff}%</td>
+                    <td style="width: 33%;"><b>System Verdict:</b> <span style="color:#1E8449; font-weight:800;">{p_pick} ({p_grade})</span></td>
+                    <td style="width: 33%;"><b>Calculated EV Edge:</b> {p_ev}</td>
+                    <td style="width: 33%;"><b>Win Split Delta:</b> +{p_diff}%</td>
                 </tr>
                 <tr>
-                    <td><b>Vegas Implied Projection:</b> Away: {v_win_away} | Home: {v_win_home}</td>
-                    <td><b>Your Model Implied:</b> Away: {m_win_away} | Home: {m_win_home}</td>
-                    <td><b>Sharp Syndicate Target:</b> <span style="color:#2980B9; font-weight:700;">{s_dog if s_dog else 'None Detected'}</span></td>
+                    <td><b>Vegas Implied Projection:</b> A: {v_win_away} | H: {v_win_home}</td>
+                    <td><b>Your Model Implied:</b> A: {m_win_away} | H: {m_win_home}</td>
+                    <td><b>Sharp Syndicate Side:</b> <span style="color:#2980B9; font-weight:700;">{s_dog if s_dog else 'None Detected'}</span></td>
+                </tr>
+                <tr style="border-top: 1px solid #BDC3C7;">
+                    <td><b>O/U Line Target:</b> <span style="font-weight:700; color:#8E44AD;">{ou_line} ({ou_side})</span></td>
+                    <td><b>Model Total Edge:</b> {ou_pct}</td>
+                    <td><b>Sharp Totals Delta (Away):</b> {sharp_tot_a}</td>
                 </tr>
             </table>
         </div>
