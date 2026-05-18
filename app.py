@@ -8,7 +8,7 @@ from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
 st.set_page_config(
     page_title="MLB Quantitative Command Center",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # Elite Dark/High-Contrast UI Styling Injection
@@ -262,16 +262,16 @@ selected_row_data = None
 with tab_all:
     st.markdown("### Master Active Board")
     grid_response = compile_interactive_grid(base_df, grid_height=500)
-    if grid_response.selected_rows:
-        selected_row_data = grid_response.selected_rows[0]
+    if grid_response.selected_rows is not None and not grid_response.selected_rows.empty:
+        selected_row_data = grid_response.selected_rows.iloc[0].to_dict()
 
 with tab_premium:
     st.markdown("### Premium Algorithmic Formations")
     if not active_execution_plays.empty:
         top_premium = active_execution_plays.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False]).head(5)
         premium_grid_response = compile_interactive_grid(top_premium, grid_height=300)
-        if premium_grid_response.selected_rows:
-            selected_row_data = premium_grid_response.selected_rows[0]
+        if premium_grid_response.selected_rows is not None and not premium_grid_response.selected_rows.empty:
+            selected_row_data = premium_grid_response.selected_rows.iloc[0].to_dict()
     else:
         st.info("No formations currently clear the Sidebar execution parameters.")
 
@@ -280,8 +280,8 @@ with tab_sharps:
     if not sharp_money_nodes.empty:
         sharp_sorted = sharp_money_nodes.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
         sharp_grid_response = compile_interactive_grid(sharp_sorted, grid_height=350)
-        if sharp_grid_response.selected_rows:
-            selected_row_data = sharp_grid_response.selected_rows[0]
+        if sharp_grid_response.selected_rows is not None and not sharp_grid_response.selected_rows.empty:
+            selected_row_data = sharp_grid_response.selected_rows.iloc[0].to_dict()
     else:
         st.info("No active sharp delta found on the current slate export.")
 
@@ -290,8 +290,8 @@ with tab_confluence:
     if not confluence_nodes.empty:
         confluence_sorted = confluence_nodes.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
         conf_grid_response = compile_interactive_grid(confluence_sorted, grid_height=350)
-        if conf_grid_response.selected_rows:
-            selected_row_data = conf_grid_response.selected_rows[0]
+        if conf_grid_response.selected_rows is not None and not conf_grid_response.selected_rows.empty:
+            selected_row_data = conf_grid_response.selected_rows.iloc[0].to_dict()
     else:
         st.info("No structural convergence points detected between model parameters and sharp actions.")
 
