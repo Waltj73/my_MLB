@@ -82,6 +82,9 @@ base_df = base_df[
     (~base_df["Home Team"].astype(str).str.contains("Unnamed"))
 ].copy().reset_index(drop=True)
 
+# Generate a permanent immutable key identifier for cross-tab row locking
+base_df["_match_id"] = base_df["Away Team"].astype(str) + "_" + base_df["Home Team"].astype(str)
+
 # Helper function to convert text strings safely into numbers for sorting/logic
 def clean_numerical_vector(val):
     try:
@@ -89,19 +92,13 @@ def clean_numerical_vector(val):
     except ValueError:
         return 0.0
 
-# AUTOMATED COLUMN SIGNATURE DETECTOR (Robust fallback safety net)
-PICK_COL = "Model Pick" if "Model Pick" in base_df.columns else "Pick" if "Pick" in base_df.columns else None
-EV_COL = "Pick EV" if "Pick EV" in base_df.columns else "EV" if "EV" in base_df.columns else None
-DIFF_COL = "Pick Diff" if "Pick Diff" in base_df.columns else "Diff" if "Diff" in base_df.columns else None
-
-# Fallback assignments if the prefix versions aren't found
-if not EV_COL:
-    EV_COL = "EV Away" if "EV Away" in base_df.columns else base_df.columns[min(13, len(base_df.columns)-1)]
-if not DIFF_COL:
-    DIFF_COL = "Diff Away" if "Diff Away" in base_df.columns else base_df.columns[min(11, len(base_df.columns)-1)]
+# AUTOMATED COLUMN SIGNATURE DETECTOR
+PICK_COL = "Pick" if "Pick" in base_df.columns else "Model Pick" if "Model Pick" in base_df.columns else None
+EV_COL = "EV Away" if "EV Away" in base_df.columns else "Pick EV" if "Pick EV" in base_df.columns else "EV"
+DIFF_COL = "Diff Away" if "Diff Away" in base_df.columns else "Pick Diff" if "Pick Diff" in base_df.columns else "Diff"
 
 if not PICK_COL:
-    st.error("❌ Column Mapping Fault: Could not detect a 'Model Pick' or 'Pick' column header in your Google Sheet.")
+    st.error("❌ Column Mapping Fault: Could not detect a 'Pick' or 'Model Pick' column header in your Google Sheet.")
     st.stop()
 
 
@@ -109,12 +106,14 @@ if not PICK_COL:
 # BULLETPROOF INTERACTIVE GRID COMPILER ENGINE
 # ============================================================
 def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
-    # Base configuration builder directly from the passed target dataframe
     gb = GridOptionsBuilder.from_dataframe(target_df)
     gb.configure_default_column(resizable=True, sortable=True, filter=True, minWidth=115)
     gb.configure_grid_options(rowHeight=38, headerHeight=42, rowSelection="single", preSelectAllRows=False)
 
-    # Safely apply styles ONLY if the column actually exists in this specific dataframe
+    # Hide the backend lookup tracking key from showing up on screen UI
+    if "_match_id" in target_df.columns:
+        gb.configure_column("_match_id", hide=True)
+
     if "Away Team" in target_df.columns:
         gb.configure_column("Away Team", pinned="left", width=130, cellStyle={"fontWeight": "800", "color": "#111111"})
     if "Home Team" in target_df.columns:
@@ -133,15 +132,12 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
             """))
     else:
         if PICK_COL in target_df.columns:
-            gb.configure_column(PICK_COL, pinned="right", width=130, cellStyle=JsCode("""
-                function(p) { return p.value === 'PASS' ? {backgroundColor: '#EBEDEF', color: '#7F8C8D'} : {backgroundColor: '#27AE60', color: '#ffffff', fontWeight: '900', textAlign: 'center'}; }
-            """))
-        if "Grade" in target_df.columns:
-            gb.configure_column("Grade", pinned="right", width=115, cellStyle=JsCode("""
-                function(p) {
-                    if (p.value === 'Strong Play' || p.value === 'Playable') return {backgroundColor: '#1E8449', color: '#ffffff', fontWeight: 'bold'};
-                    if (p.value === 'Lean') return {backgroundColor: '#F1C40F', color: '#111111'};
-                    return {backgroundColor: '#EBEDEF', color: '#7F8C8D'};
+            gb.configure_column(PICK_COL, pinned="right", width=140, cellStyle=JsCode("""
+                function(p) { 
+                    if (!p.value || String(p.value).trim() === '' || String(p.value).toUpperCase() === 'PASS') {
+                        return {backgroundColor: '#EBEDEF', color: '#7F8C8D', textAlign: 'center'};
+                    }
+                    return {backgroundColor: '#27AE60', color: '#ffffff', fontWeight: '900', textAlign: 'center'}; 
                 }
             """))
 
@@ -157,7 +153,7 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
     """)
 
     if mode != "totals":
-        for ev_col in ["EV Away", "EV Home", EV_COL]:
+        for ev_col in ["EV Away", "EV Home", "Pick EV", "EV"]:
             if ev_col in target_df.columns: 
                 gb.configure_column(ev_col, cellStyle=ev_format_script)
 
@@ -166,7 +162,7 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
     return AgGrid(
         target_df,
         gridOptions=g_options,
-        height=500,
+        height=480,
         fit_columns_on_grid_load=False,
         allow_unsafe_jscode=True,
         theme="alpine",
@@ -181,14 +177,13 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
 st.title("⚾ MLB Quantitative Command Center")
 st.caption("High-velocity computational matrix driving predictive delta analysis.")
 
-# System Diagnostics Row pulled directly from sheet states safely
-total_active_slate = len(base_df)
+# System Diagnostics Datasets
 active_execution_plays = base_df[(base_df[PICK_COL].astype(str).str.strip() != "") & (base_df[PICK_COL].astype(str).str.upper() != "PASS")]
 sharp_money_nodes = base_df[base_df["Sharp Dog"].astype(str).str.strip() != ""] if "Sharp Dog" in base_df.columns else pd.DataFrame()
 confluence_nodes = base_df[base_df.apply(lambda r: (str(r.get("Sharp Dog", "")).strip() != "" and str(r[PICK_COL]).strip().upper() == str(r.get("Sharp Dog", "")).strip().upper()), axis=1)] if "Sharp Dog" in base_df.columns else pd.DataFrame()
 
 idx_c1, idx_c2, idx_c3, idx_c4 = st.columns(4)
-idx_c1.metric("Slate Volume", total_active_slate)
+idx_c1.metric("Slate Volume", len(base_df))
 idx_c2.metric("Execution Triggers", len(active_execution_plays))
 idx_c3.metric("Sharp Monitored Assets", len(sharp_money_nodes))
 idx_c4.metric("Systemic Confluences", len(confluence_nodes))
@@ -206,22 +201,19 @@ tab_all, tab_ou, tab_premium, tab_sharps, tab_confluence = st.tabs([
     "All Games Matrix", "Over/Under Matrix", "Top System Plays", "Sharp Money Tracker", "System Confluence Signals"
 ])
 
-runtime_selection = None
+selected_match_id = None
 
 with tab_all:
     grid_response = compile_interactive_grid(base_df, mode="sides", grid_key="all_games_matrix_grid")
     if grid_response.selected_rows is not None and not grid_response.selected_rows.empty:
-        runtime_selection = grid_response.selected_rows.iloc[0].to_dict()
+        selected_match_id = grid_response.selected_rows.iloc[0].get("_match_id")
 
 with tab_ou:
-    # Filter dataset for totals tab view seamlessly
-    ou_cols = [c for c in ["Away Team", "Home Team", "O/U", "Over", "% O/U", "Sharps Totals Away"] if c in base_df.columns]
+    ou_cols = [c for c in ["Away Team", "Home Team", "O/U", "Over", "% O/U", "Sharps Totals Away", "_match_id"] if c in base_df.columns]
     ou_df = base_df[ou_cols].copy() if ou_cols else base_df
     ou_grid_response = compile_interactive_grid(ou_df, mode="totals", grid_key="ou_matrix_grid")
     if ou_grid_response.selected_rows is not None and not ou_grid_response.selected_rows.empty:
-        # Match back against index to capture full context parameters for the telemetry card
-        selected_idx = ou_grid_response.selected_rows.index[0]
-        runtime_selection = base_df.loc[selected_idx].to_dict()
+        selected_match_id = ou_grid_response.selected_rows.iloc[0].get("_match_id")
 
 with tab_premium:
     if not active_execution_plays.empty:
@@ -230,7 +222,7 @@ with tab_premium:
         top_premium = top_premium.sort_values(by="_sort_ev", ascending=False).drop(columns=["_sort_ev"])
         premium_response = compile_interactive_grid(top_premium, mode="sides", grid_key="premium_grid")
         if premium_response.selected_rows is not None and not premium_response.selected_rows.empty:
-            runtime_selection = premium_response.selected_rows.iloc[0].to_dict()
+            selected_match_id = premium_response.selected_rows.iloc[0].get("_match_id")
     else:
         st.info("No active execution plays found directly on the sheet.")
 
@@ -238,7 +230,7 @@ with tab_sharps:
     if not sharp_money_nodes.empty:
         sharp_response = compile_interactive_grid(sharp_money_nodes, mode="sides", grid_key="sharps_grid")
         if sharp_response.selected_rows is not None and not sharp_response.selected_rows.empty:
-            runtime_selection = sharp_response.selected_rows.iloc[0].to_dict()
+            selected_match_id = sharp_response.selected_rows.iloc[0].get("_match_id")
     else:
         st.info("No active sharp delta found on the current slate export.")
 
@@ -246,16 +238,19 @@ with tab_confluence:
     if not confluence_nodes.empty:
         conf_response = compile_interactive_grid(confluence_nodes, mode="sides", grid_key="confluence_grid")
         if conf_response.selected_rows is not None and not conf_response.selected_rows.empty:
-            runtime_selection = conf_response.selected_rows.iloc[0].to_dict()
+            selected_match_id = conf_response.selected_rows.iloc[0].get("_match_id")
     else:
         st.info("No structural convergence points detected.")
 
-# Default fallback to index 0 (top row) if no row selection has been actively made yet
-if runtime_selection is None and not base_df.empty:
-    runtime_selection = base_df.iloc[0].to_dict()
+# Core Cross-Tab Inversion Controller: Resolves the exact dataset row cleanly
+if selected_match_id:
+    matched_rows = base_df[base_df["_match_id"] == selected_match_id]
+    runtime_selection = matched_rows.iloc[0].to_dict() if not matched_rows.empty else base_df.iloc[0].to_dict()
+else:
+    runtime_selection = base_df.iloc[0].to_dict() if not base_df.empty else None
 
-# 3. BACKFILL RESERVED TELEMETRY BOX WITH SHEET DATA SAFELY
-if runtime_selection is not None:
+# 3. BACKFILL RESERVED TELEMETRY BOX WITH ACTUAL SHEET VALUE MATRIX
+if runtime_selection:
     t_away = runtime_selection.get("Away Team", "N/A")
     t_home = runtime_selection.get("Home Team", "N/A")
     v_win_away = runtime_selection.get("Vegas Win Away", "0%")
@@ -263,12 +258,15 @@ if runtime_selection is not None:
     m_win_away = runtime_selection.get("My Win Away", "0%")
     m_win_home = runtime_selection.get("My Win Home", "0%")
     
-    p_ev = runtime_selection.get(EV_COL, "0.0")
-    p_diff = runtime_selection.get(DIFF_COL, "0.0")
-    p_pick = runtime_selection.get(PICK_COL, "PASS")
-    p_grade = runtime_selection.get("Grade", "Pass")
-    s_dog = runtime_selection.get("Sharp Dog", "")
+    p_ev_away = runtime_selection.get("EV Away", "0.0")
+    p_ev_home = runtime_selection.get("EV Home", "0.0")
+    p_diff_away = runtime_selection.get("Diff Away", "0.0")
+    p_diff_home = runtime_selection.get("Diff Home", "0.0")
     
+    p_pick = str(runtime_selection.get(PICK_COL, "")).strip()
+    p_display_verdict = p_pick if p_pick != "" else "PASS"
+    
+    s_dog = runtime_selection.get("Sharp Dog", "")
     ou_line = runtime_selection.get("O/U", "N/A")
     ou_side = runtime_selection.get("Over", "PASS")
     ou_pct = runtime_selection.get("% O/U", "0%")
@@ -279,9 +277,9 @@ if runtime_selection is not None:
         <h4>⚡ TRACKING METRIC ARRAY: {t_away} vs {t_home}</h4>
         <table style="width:100%; border:none; font-family:monospace; font-size:14px; color:#2C3E50; border-collapse: separate; border-spacing: 0 8px;">
             <tr>
-                <td style="width: 33%;"><b>System Verdict:</b> <span style="color:#1E8449; font-weight:800;">{p_pick} ({p_grade})</span></td>
-                <td style="width: 33%;"><b>Calculated EV Edge:</b> {p_ev}</td>
-                <td style="width: 33%;"><b>Win Split Delta:</b> {p_diff}</td>
+                <td style="width: 33%;"><b>System Verdict:</b> <span style="color:{'#27AE60' if p_display_verdict != 'PASS' else '#7F8C8D'}; font-weight:800;">{p_display_verdict}</span></td>
+                <td style="width: 33%;"><b>Calculated EV Edge:</b> A: {p_ev_away} | H: {p_ev_home}</td>
+                <td style="width: 33%;"><b>Win Split Delta:</b> A: {p_diff_away} | H: {p_diff_home}</td>
             </tr>
             <tr>
                 <td><b>Vegas Implied Projection:</b> A: {v_win_away} | H: {v_win_home}</td>
