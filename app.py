@@ -114,7 +114,7 @@ def evaluate_tactical_side(row, ev_limit, diff_limit):
 base_df = load_and_sanitize_market_data()
 if base_df.empty: st.stop()
 
-# Validate nodes
+# Confirm structural node presence
 required_nodes = [
     "Away Team", "Home Team", "Away Odds", "Home Odds", "Sharp Away", "Sharp Home", "Sharp Dog",
     "Vegas Win Away", "Vegas Win Home", "My Win Away", "My Win Home", "Diff Away", "Diff Home", 
@@ -125,10 +125,11 @@ if missing_nodes:
     st.error(f"❌ Aborting. Column signature mismatch. Missing nodes: {missing_nodes}")
     st.stop()
 
-# CRITICAL FIX: Eliminate completely empty tracking lines or helper padding rows
+# STAGE 1 CLEANING OVERRIDE: Drop rows where EITHER name is missing or whitespace to correct grid offsets
 base_df = base_df[
     (base_df["Away Team"].astype(str).str.strip() != "") & 
-    (base_df["Home Team"].astype(str).str.strip() != "")
+    (base_df["Home Team"].astype(str).str.strip() != "") &
+    (~base_df["Away Team"].astype(str).str.contains("Unnamed"))
 ].copy().reset_index(drop=True)
 
 # Run Vectorized Engine Mapping dynamically factoring in User's Sidebar Control Knobs
@@ -284,8 +285,8 @@ tab_all, tab_ou, tab_premium, tab_sharps, tab_confluence, tab_guide = st.tabs([
     "All Games Matrix", "Over/Under Matrix", "Top System Plays", "Sharp Money Tracker", "System Confluence Signals", "📖 System Logic Guide"
 ])
 
-# CRITICAL FIX: Explicitly default to index 0 (Philadelphia) if no row click registers
-selected_row_data = base_df.iloc[0].to_dict()
+# STAGE 2 ALIGNMENT OVERRIDE: Bind the base state explicitly to the actual 1st item of our newly structured dataframe
+selected_row_data = base_df.iloc[0].to_dict() if not base_df.empty else None
 
 with tab_all:
     st.markdown("### Master Active Board")
@@ -353,6 +354,8 @@ if selected_row_data is not None:
     v_win_home = selected_row_data.get("Vegas Win Home", "0%")
     m_win_away = selected_row_data.get("My Win Away", "0%")
     m_win_home = selected_row_data.get("My Win Home", "0%")
+    
+    # Safely format model vector projections for display output
     p_ev = selected_row_data.get("Pick EV", 0.0)
     p_diff = selected_row_data.get("Pick Diff", 0.0)
     p_pick = selected_row_data.get("Model Pick", "PASS")
