@@ -109,35 +109,21 @@ if not PICK_COL:
 # BULLETPROOF INTERACTIVE GRID COMPILER ENGINE
 # ============================================================
 def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
-    # Dynamically build display lists *only* from columns that explicitly exist right now
-    if mode == "totals":
-        ideal_cols = ["Away Team", "Home Team", "O/U", "Over", "% O/U", "Sharps Totals Away"]
-    else:
-        ideal_cols = [
-            "Away Team", "Home Team", "Away Odds", "Home Odds", "Sharp Away",
-            "Sharp Home", "Sharp Dog", "Vegas Win Away", "Vegas Win Home",
-            "My Win Away", "My Win Home", "Diff Away", "Diff Home", "EV Away",
-            "EV Home", PICK_COL, "Pick Side", "Pick Odds", EV_COL, DIFF_COL, "Grade"
-        ]
-    
-    # Filter strictly to existing columns to guarantee AgGrid never hits a key fault
-    valid_cols = [c for c in ideal_cols if c in target_df.columns]
-    working_df = target_df[valid_cols].copy()
-
-    gb = GridOptionsBuilder.from_dataframe(working_df)
+    # Base configuration builder directly from the passed target dataframe
+    gb = GridOptionsBuilder.from_dataframe(target_df)
     gb.configure_default_column(resizable=True, sortable=True, filter=True, minWidth=115)
     gb.configure_grid_options(rowHeight=38, headerHeight=42, rowSelection="single", preSelectAllRows=False)
 
-    # Apply specialized layouts safely if the targeted columns exist
-    if "Away Team" in working_df.columns:
+    # Safely apply styles ONLY if the column actually exists in this specific dataframe
+    if "Away Team" in target_df.columns:
         gb.configure_column("Away Team", pinned="left", width=130, cellStyle={"fontWeight": "800", "color": "#111111"})
-    if "Home Team" in working_df.columns:
+    if "Home Team" in target_df.columns:
         gb.configure_column("Home Team", pinned="left", width=130, cellStyle={"fontWeight": "800", "color": "#111111"})
     
     if mode == "totals":
-        if "O/U" in working_df.columns:
+        if "O/U" in target_df.columns:
             gb.configure_column("O/U", width=100, cellStyle={"fontWeight": "700", "textAlign": "center"})
-        if "Over" in working_df.columns:
+        if "Over" in target_df.columns:
             gb.configure_column("Over", width=110, cellStyle=JsCode("""
                 function(p) {
                     if (p.value === 'OVER') return {backgroundColor: '#D4EFDF', color: '#196F3D', fontWeight: 'bold', textAlign: 'center'};
@@ -146,11 +132,11 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
                 }
             """))
     else:
-        if PICK_COL in working_df.columns:
+        if PICK_COL in target_df.columns:
             gb.configure_column(PICK_COL, pinned="right", width=130, cellStyle=JsCode("""
                 function(p) { return p.value === 'PASS' ? {backgroundColor: '#EBEDEF', color: '#7F8C8D'} : {backgroundColor: '#27AE60', color: '#ffffff', fontWeight: '900', textAlign: 'center'}; }
             """))
-        if "Grade" in working_df.columns:
+        if "Grade" in target_df.columns:
             gb.configure_column("Grade", pinned="right", width=115, cellStyle=JsCode("""
                 function(p) {
                     if (p.value === 'Strong Play' || p.value === 'Playable') return {backgroundColor: '#1E8449', color: '#ffffff', fontWeight: 'bold'};
@@ -172,13 +158,13 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
 
     if mode != "totals":
         for ev_col in ["EV Away", "EV Home", EV_COL]:
-            if ev_col in working_df.columns: 
+            if ev_col in target_df.columns: 
                 gb.configure_column(ev_col, cellStyle=ev_format_script)
 
     g_options = gb.build()
     
     return AgGrid(
-        working_df,
+        target_df,
         gridOptions=g_options,
         height=500,
         fit_columns_on_grid_load=False,
@@ -228,15 +214,20 @@ with tab_all:
         runtime_selection = grid_response.selected_rows.iloc[0].to_dict()
 
 with tab_ou:
-    ou_grid_response = compile_interactive_grid(base_df, mode="totals", grid_key="ou_matrix_grid")
+    # Filter dataset for totals tab view seamlessly
+    ou_cols = [c for c in ["Away Team", "Home Team", "O/U", "Over", "% O/U", "Sharps Totals Away"] if c in base_df.columns]
+    ou_df = base_df[ou_cols].copy() if ou_cols else base_df
+    ou_grid_response = compile_interactive_grid(ou_df, mode="totals", grid_key="ou_matrix_grid")
     if ou_grid_response.selected_rows is not None and not ou_grid_response.selected_rows.empty:
-        runtime_selection = ou_grid_response.selected_rows.iloc[0].to_dict()
+        # Match back against index to capture full context parameters for the telemetry card
+        selected_idx = ou_grid_response.selected_rows.index[0]
+        runtime_selection = base_df.loc[selected_idx].to_dict()
 
 with tab_premium:
     if not active_execution_plays.empty:
         top_premium = active_execution_plays.copy()
         top_premium["_sort_ev"] = top_premium[EV_COL].apply(clean_numerical_vector)
-        top_premium = top_premium.sort_values(by="_sort_ev", ascending=False)
+        top_premium = top_premium.sort_values(by="_sort_ev", ascending=False).drop(columns=["_sort_ev"])
         premium_response = compile_interactive_grid(top_premium, mode="sides", grid_key="premium_grid")
         if premium_response.selected_rows is not None and not premium_response.selected_rows.empty:
             runtime_selection = premium_response.selected_rows.iloc[0].to_dict()
