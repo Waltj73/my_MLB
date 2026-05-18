@@ -53,7 +53,7 @@ st.markdown("""
 
 
 # ============================================================
-# PIPELINE: DATA INGESTION & DIRECT MAPPING
+# PIPELINE: DATA INGESTION & AUTOMATED CLEANING
 # ============================================================
 SHEET_ID = "1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0"
 SHEET_NAME = "APP_EXPORT"
@@ -82,69 +82,82 @@ base_df = base_df[
     (~base_df["Home Team"].astype(str).str.contains("Unnamed"))
 ].copy().reset_index(drop=True)
 
-# Helper function to convert text strings into clean numbers for coloring/sorting logic
+# Helper function to convert text strings safely into numbers for sorting/logic
 def clean_numerical_vector(val):
     try:
         return float(str(val).replace("%", "").replace("+", "").replace(",", "").strip())
     except ValueError:
         return 0.0
 
-# AUTOMATED COLUMN DETECTOR (Prevents KeyError Crashes)
+# AUTOMATED COLUMN SIGNATURE DETECTOR (Robust fallback safety net)
 PICK_COL = "Model Pick" if "Model Pick" in base_df.columns else "Pick" if "Pick" in base_df.columns else None
-EV_COL = "Pick EV" if "Pick EV" in base_df.columns else "EV" if "EV" in base_df.columns else "EV Away"
-DIFF_COL = "Pick Diff" if "Pick Diff" in base_df.columns else "Diff" if "Diff" in base_df.columns else "Diff Away"
+EV_COL = "Pick EV" if "Pick EV" in base_df.columns else "EV" if "EV" in base_df.columns else None
+DIFF_COL = "Pick Diff" if "Pick Diff" in base_df.columns else "Diff" if "Diff" in base_df.columns else None
+
+# Fallback assignments if the prefix versions aren't found
+if not EV_COL:
+    EV_COL = "EV Away" if "EV Away" in base_df.columns else base_df.columns[min(13, len(base_df.columns)-1)]
+if not DIFF_COL:
+    DIFF_COL = "Diff Away" if "Diff Away" in base_df.columns else base_df.columns[min(11, len(base_df.columns)-1)]
 
 if not PICK_COL:
-    st.error("❌ Column Mapping Fault: Could not find a 'Model Pick' or 'Pick' column in your Google Sheet export.")
+    st.error("❌ Column Mapping Fault: Could not detect a 'Model Pick' or 'Pick' column header in your Google Sheet.")
     st.stop()
 
 
 # ============================================================
-# HIGH-PERFORMANCE GRID COMPILER ENGINE
+# BULLETPROOF INTERACTIVE GRID COMPILER ENGINE
 # ============================================================
 def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
+    # Dynamically build display lists *only* from columns that explicitly exist right now
     if mode == "totals":
-        display_cols = ["Away Team", "Home Team", "O/U", "Over", "% O/U", "Sharps Totals Away"]
+        ideal_cols = ["Away Team", "Home Team", "O/U", "Over", "% O/U", "Sharps Totals Away"]
     else:
-        # Pulls parameters cleanly mirroring your spreadsheet layout positions
-        display_cols = [
+        ideal_cols = [
             "Away Team", "Home Team", "Away Odds", "Home Odds", "Sharp Away",
             "Sharp Home", "Sharp Dog", "Vegas Win Away", "Vegas Win Home",
             "My Win Away", "My Win Home", "Diff Away", "Diff Home", "EV Away",
-            "EV Home", PICK_COL, "Pick Side", "Pick Odds", EV_COL,
-            DIFF_COL, "Grade"
+            "EV Home", PICK_COL, "Pick Side", "Pick Odds", EV_COL, DIFF_COL, "Grade"
         ]
-        
-    valid_cols = [c for c in display_cols if c in target_df.columns]
+    
+    # Filter strictly to existing columns to guarantee AgGrid never hits a key fault
+    valid_cols = [c for c in ideal_cols if c in target_df.columns]
     working_df = target_df[valid_cols].copy()
 
     gb = GridOptionsBuilder.from_dataframe(working_df)
     gb.configure_default_column(resizable=True, sortable=True, filter=True, minWidth=115)
     gb.configure_grid_options(rowHeight=38, headerHeight=42, rowSelection="single", preSelectAllRows=False)
 
-    gb.configure_column("Away Team", pinned="left", width=130, cellStyle={"fontWeight": "800", "color": "#111111"})
-    gb.configure_column("Home Team", pinned="left", width=130, cellStyle={"fontWeight": "800", "color": "#111111"})
+    # Apply specialized layouts safely if the targeted columns exist
+    if "Away Team" in working_df.columns:
+        gb.configure_column("Away Team", pinned="left", width=130, cellStyle={"fontWeight": "800", "color": "#111111"})
+    if "Home Team" in working_df.columns:
+        gb.configure_column("Home Team", pinned="left", width=130, cellStyle={"fontWeight": "800", "color": "#111111"})
     
     if mode == "totals":
-        gb.configure_column("O/U", width=100, cellStyle={"fontWeight": "700", "textAlign": "center"})
-        gb.configure_column("Over", width=110, cellStyle=JsCode("""
-            function(p) {
-                if (p.value === 'OVER') return {backgroundColor: '#D4EFDF', color: '#196F3D', fontWeight: 'bold', textAlign: 'center'};
-                if (p.value === 'UNDER') return {backgroundColor: '#FADBD8', color: '#78281F', fontWeight: 'bold', textAlign: 'center'};
-                return {textAlign: 'center'};
-            }
-        """))
+        if "O/U" in working_df.columns:
+            gb.configure_column("O/U", width=100, cellStyle={"fontWeight": "700", "textAlign": "center"})
+        if "Over" in working_df.columns:
+            gb.configure_column("Over", width=110, cellStyle=JsCode("""
+                function(p) {
+                    if (p.value === 'OVER') return {backgroundColor: '#D4EFDF', color: '#196F3D', fontWeight: 'bold', textAlign: 'center'};
+                    if (p.value === 'UNDER') return {backgroundColor: '#FADBD8', color: '#78281F', fontWeight: 'bold', textAlign: 'center'};
+                    return {textAlign: 'center'};
+                }
+            """))
     else:
-        gb.configure_column(PICK_COL, pinned="right", width=130, cellStyle=JsCode(f"""
-            function(p) {{ return p.value === 'PASS' ? {{backgroundColor: '#EBEDEF', color: '#7F8C8D'}} : {{backgroundColor: '#27AE60', color: '#ffffff', fontWeight: '900', textAlign: 'center'}}; }}
-        """))
-        gb.configure_column("Grade", pinned="right", width=115, cellStyle=JsCode("""
-            function(p) {
-                if (p.value === 'Strong Play' || p.value === 'Playable') return {backgroundColor: '#1E8449', color: '#ffffff', fontWeight: 'bold'};
-                if (p.value === 'Lean') return {backgroundColor: '#F1C40F', color: '#111111'};
-                return {backgroundColor: '#EBEDEF', color: '#7F8C8D'};
-            }
-        """))
+        if PICK_COL in working_df.columns:
+            gb.configure_column(PICK_COL, pinned="right", width=130, cellStyle=JsCode("""
+                function(p) { return p.value === 'PASS' ? {backgroundColor: '#EBEDEF', color: '#7F8C8D'} : {backgroundColor: '#27AE60', color: '#ffffff', fontWeight: '900', textAlign: 'center'}; }
+            """))
+        if "Grade" in working_df.columns:
+            gb.configure_column("Grade", pinned="right", width=115, cellStyle=JsCode("""
+                function(p) {
+                    if (p.value === 'Strong Play' || p.value === 'Playable') return {backgroundColor: '#1E8449', color: '#ffffff', fontWeight: 'bold'};
+                    if (p.value === 'Lean') return {backgroundColor: '#F1C40F', color: '#111111'};
+                    return {backgroundColor: '#EBEDEF', color: '#7F8C8D'};
+                }
+            """))
 
     ev_format_script = JsCode("""
         function(p) {
@@ -159,7 +172,8 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
 
     if mode != "totals":
         for ev_col in ["EV Away", "EV Home", EV_COL]:
-            if ev_col in working_df.columns: gb.configure_column(ev_col, cellStyle=ev_format_script)
+            if ev_col in working_df.columns: 
+                gb.configure_column(ev_col, cellStyle=ev_format_script)
 
     g_options = gb.build()
     
@@ -181,11 +195,11 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
 st.title("⚾ MLB Quantitative Command Center")
 st.caption("High-velocity computational matrix driving predictive delta analysis.")
 
-# System Diagnostics Row pulled directly from sheet states
+# System Diagnostics Row pulled directly from sheet states safely
 total_active_slate = len(base_df)
 active_execution_plays = base_df[(base_df[PICK_COL].astype(str).str.strip() != "") & (base_df[PICK_COL].astype(str).str.upper() != "PASS")]
-sharp_money_nodes = base_df[base_df["Sharp Dog"].astype(str).str.strip() != ""]
-confluence_nodes = base_df[base_df.apply(lambda r: (str(r["Sharp Dog"]).strip() != "" and str(r[PICK_COL]).strip().upper() == str(r["Sharp Dog"]).strip().upper()), axis=1)]
+sharp_money_nodes = base_df[base_df["Sharp Dog"].astype(str).str.strip() != ""] if "Sharp Dog" in base_df.columns else pd.DataFrame()
+confluence_nodes = base_df[base_df.apply(lambda r: (str(r.get("Sharp Dog", "")).strip() != "" and str(r[PICK_COL]).strip().upper() == str(r.get("Sharp Dog", "")).strip().upper()), axis=1)] if "Sharp Dog" in base_df.columns else pd.DataFrame()
 
 idx_c1, idx_c2, idx_c3, idx_c4 = st.columns(4)
 idx_c1.metric("Slate Volume", total_active_slate)
@@ -220,7 +234,6 @@ with tab_ou:
 
 with tab_premium:
     if not active_execution_plays.empty:
-        # Sorts safely using our detected EV column
         top_premium = active_execution_plays.copy()
         top_premium["_sort_ev"] = top_premium[EV_COL].apply(clean_numerical_vector)
         top_premium = top_premium.sort_values(by="_sort_ev", ascending=False)
@@ -246,11 +259,11 @@ with tab_confluence:
     else:
         st.info("No structural convergence points detected.")
 
-# Default fallback to index 0 (top visible row) if no row selection has been made yet
+# Default fallback to index 0 (top row) if no row selection has been actively made yet
 if runtime_selection is None and not base_df.empty:
     runtime_selection = base_df.iloc[0].to_dict()
 
-# 3. BACKFILL RESERVED TELEMETRY BOX WITH SHEET DATA
+# 3. BACKFILL RESERVED TELEMETRY BOX WITH SHEET DATA SAFELY
 if runtime_selection is not None:
     t_away = runtime_selection.get("Away Team", "N/A")
     t_home = runtime_selection.get("Home Team", "N/A")
