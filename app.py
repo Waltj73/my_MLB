@@ -21,8 +21,7 @@ URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sh
 
 EV_THRESHOLD = 5
 DIFF_THRESHOLD = 5
-
-TABLE_HEIGHT = 950
+TABLE_HEIGHT = 1000
 
 
 # ============================================================
@@ -106,7 +105,6 @@ def color_board(row):
     styles = [""] * len(row)
     col = {c: i for i, c in enumerate(row.index)}
 
-    # EV columns
     for c in ["EV Away", "EV Home", "Pick EV"]:
         if c in col:
             val = to_num(row[c])
@@ -120,7 +118,6 @@ def color_board(row):
             elif val < 0:
                 styles[col[c]] = "background-color:#f5b7b1;color:black;"
 
-    # Diff columns
     for c in ["Diff Away", "Diff Home", "Pick Diff"]:
         if c in col:
             val = to_num(row[c])
@@ -132,14 +129,12 @@ def color_board(row):
             elif val <= -10:
                 styles[col[c]] = "background-color:#f5b7b1;color:black;"
 
-    # Pick
     if "Model Pick" in col:
         if row["Model Pick"] != "PASS":
             styles[col["Model Pick"]] = "background-color:#1e8449;color:white;font-weight:bold;"
         else:
             styles[col["Model Pick"]] = "background-color:#eeeeee;color:#777;"
 
-    # Grade
     if "Grade" in col:
         if row["Grade"] == "Strong":
             styles[col["Grade"]] = "background-color:#00a651;color:white;font-weight:bold;"
@@ -150,11 +145,9 @@ def color_board(row):
         else:
             styles[col["Grade"]] = "background-color:#eeeeee;color:#777;"
 
-    # Sharp Dog
     if "Sharp Dog" in col and str(row["Sharp Dog"]).strip() != "":
         styles[col["Sharp Dog"]] = "background-color:#d6eaf8;color:#154360;font-weight:bold;"
 
-    # Signal row
     if (
         "Model Pick" in row.index
         and "Sharp Dog" in row.index
@@ -174,29 +167,13 @@ def color_board(row):
 # ============================================================
 
 def show_table(dataframe):
+    cols = [c for c in DISPLAY_COLS if c in dataframe.columns]
+
     st.dataframe(
-        dataframe[DISPLAY_COLS].style.apply(color_board, axis=1),
-        use_container_width=True,
+        dataframe[cols].style.apply(color_board, axis=1),
+        use_container_width=False,
         hide_index=True,
-        height=TABLE_HEIGHT,
-        column_config={
-            "Away Team": st.column_config.TextColumn("Away", width="small"),
-            "Away Odds": st.column_config.TextColumn("A Odds", width="small"),
-            "Home Team": st.column_config.TextColumn("Home", width="small"),
-            "Home Odds": st.column_config.TextColumn("H Odds", width="small"),
-            "Sharp Dog": st.column_config.TextColumn("Sharp", width="small"),
-            "My Win Away": st.column_config.TextColumn("A Win%", width="small"),
-            "My Win Home": st.column_config.TextColumn("H Win%", width="small"),
-            "Diff Away": st.column_config.NumberColumn("A Diff", width="small", format="%.1f"),
-            "Diff Home": st.column_config.NumberColumn("H Diff", width="small", format="%.1f"),
-            "EV Away": st.column_config.NumberColumn("A EV", width="small", format="%.1f"),
-            "EV Home": st.column_config.NumberColumn("H EV", width="small", format="%.1f"),
-            "Model Pick": st.column_config.TextColumn("Pick", width="small"),
-            "Pick Odds": st.column_config.TextColumn("P Odds", width="small"),
-            "Pick EV": st.column_config.NumberColumn("P EV", width="small", format="%.1f"),
-            "Pick Diff": st.column_config.NumberColumn("P Diff", width="small", format="%.1f"),
-            "Grade": st.column_config.TextColumn("Grade", width="small"),
-        }
+        height=TABLE_HEIGHT
     )
 
 
@@ -214,7 +191,11 @@ required_cols = [
     "Home Team",
     "Away Odds",
     "Home Odds",
+    "Sharp Away",
+    "Sharp Home",
     "Sharp Dog",
+    "Vegas Win Away",
+    "Vegas Win Home",
     "My Win Away",
     "My Win Home",
     "Diff Away",
@@ -251,27 +232,42 @@ df["Grade"] = df.apply(
     axis=1
 )
 
-# Compact columns so left/right fits better
+
+# ============================================================
+# DISPLAY COLUMNS — KEEP FULL BOARD
+# ============================================================
+
 DISPLAY_COLS = [
     "Away Team",
-    "Away Odds",
     "Home Team",
+
+    "Away Odds",
     "Home Odds",
+
+    "Sharp Away",
+    "Sharp Home",
     "Sharp Dog",
+
+    "Vegas Win Away",
+    "Vegas Win Home",
+
     "My Win Away",
     "My Win Home",
+
     "Diff Away",
     "Diff Home",
+
     "EV Away",
     "EV Home",
+
     "Model Pick",
+    "Pick Side",
     "Pick Odds",
     "Pick EV",
     "Pick Diff",
+
     "Grade",
 ]
-
-DISPLAY_COLS = [c for c in DISPLAY_COLS if c in df.columns]
 
 
 # ============================================================
