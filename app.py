@@ -114,7 +114,7 @@ def evaluate_tactical_side(row, ev_limit, diff_limit):
 base_df = load_and_sanitize_market_data()
 if base_df.empty: st.stop()
 
-# Explicitly verified nodes against image_eb6ba4.png mapping structural integrity
+# Validate nodes
 required_nodes = [
     "Away Team", "Home Team", "Away Odds", "Home Odds", "Sharp Away", "Sharp Home", "Sharp Dog",
     "Vegas Win Away", "Vegas Win Home", "My Win Away", "My Win Home", "Diff Away", "Diff Home", 
@@ -125,8 +125,11 @@ if missing_nodes:
     st.error(f"❌ Aborting. Column signature mismatch. Missing nodes: {missing_nodes}")
     st.stop()
 
-# Strip metadata rows safely
-base_df = base_df[base_df["Away Team"].astype(str).str.strip() != ""].copy().reset_index(drop=True)
+# CRITICAL FIX: Eliminate completely empty tracking lines or helper padding rows
+base_df = base_df[
+    (base_df["Away Team"].astype(str).str.strip() != "") & 
+    (base_df["Home Team"].astype(str).str.strip() != "")
+].copy().reset_index(drop=True)
 
 # Run Vectorized Engine Mapping dynamically factoring in User's Sidebar Control Knobs
 base_df[["Model Pick", "Pick Side", "Pick EV", "Pick Diff", "Pick Odds"]] = base_df.apply(
@@ -169,7 +172,6 @@ def compile_interactive_grid(target_df, mode="sides", grid_height=450):
     gb.configure_default_column(resizable=True, sortable=True, filter=True, minWidth=115)
     gb.configure_grid_options(rowHeight=38, headerHeight=42, rowSelection="single")
 
-    # Static Fixed Pins for Teams
     gb.configure_column("Away Team", pinned="left", width=130, cellStyle={"fontWeight": "800", "color": "#111111"})
     gb.configure_column("Home Team", pinned="left", width=130, cellStyle={"fontWeight": "800", "color": "#111111"})
     
@@ -210,7 +212,6 @@ def compile_interactive_grid(target_df, mode="sides", grid_height=450):
             }
         """))
 
-    # Advanced Micro-Format Layer Conditional Style Scripts
     ev_format_script = JsCode("""
         function(p) {
             let v = parseFloat(String(p.value).trim());
@@ -283,7 +284,8 @@ tab_all, tab_ou, tab_premium, tab_sharps, tab_confluence, tab_guide = st.tabs([
     "All Games Matrix", "Over/Under Matrix", "Top System Plays", "Sharp Money Tracker", "System Confluence Signals", "📖 System Logic Guide"
 ])
 
-selected_row_data = None
+# CRITICAL FIX: Explicitly default to index 0 (Philadelphia) if no row click registers
+selected_row_data = base_df.iloc[0].to_dict()
 
 with tab_all:
     st.markdown("### Master Active Board")
@@ -343,7 +345,7 @@ with tab_guide:
         * **Soft Green / Purple Odds Blocks:** Isolates underdogs vs favorites dynamically via line structure orientation.
         """)
 
-# Execute telemetry panel updates if row data has been selected
+# Render variables dynamically inside telemetry module
 if selected_row_data is not None:
     t_away = selected_row_data.get("Away Team", "N/A")
     t_home = selected_row_data.get("Home Team", "N/A")
@@ -357,7 +359,6 @@ if selected_row_data is not None:
     p_grade = selected_row_data.get("Grade", "Pass")
     s_dog = selected_row_data.get("Sharp Dog", "")
     
-    # Precise schema assignments based on final sheet layout alignment
     ou_line = selected_row_data.get("O/U", "N/A")
     ou_side = selected_row_data.get("Over", "PASS")
     ou_pct = selected_row_data.get("% O/U", "0%")
@@ -386,6 +387,3 @@ if selected_row_data is not None:
             </table>
         </div>
         """, unsafe_allow_html=True)
-else:
-    with monitor_anchor.container():
-        st.info("📡 Console Listening. Click any matchup row across the matrices below to load variables into live telemetry display panel.")
