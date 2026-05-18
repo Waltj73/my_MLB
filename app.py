@@ -53,17 +53,7 @@ st.markdown("""
 
 
 # ============================================================
-# LIVE PARAMETER CONFIGURATION (SIDEBAR CONTROL KNOBS)
-# ============================================================
-st.sidebar.markdown("## ⚙️ Quantitative Control Knobs")
-st.sidebar.markdown("Adjust systematic thresholds in real-time to filter market inefficiencies.")
-
-EV_THRESHOLD = st.sidebar.slider("Minimum Expected Value (EV)", min_value=0.0, max_value=25.0, value=5.0, step=0.5)
-DIFF_THRESHOLD = st.sidebar.slider("Minimum Probability Delta (Diff %)", min_value=0.0, max_value=20.0, value=5.0, step=0.5)
-
-
-# ============================================================
-# PIPELINE: DATA INGESTION & ROBUST PARSING
+# PIPELINE: DATA INGESTION & DIRECT MAPPING
 # ============================================================
 SHEET_ID = "1Jx8nVXHwbqnP7NS-N0MOmsEOWHFDzZjLOFFnOKskMt0"
 SHEET_NAME = "APP_EXPORT"
@@ -79,28 +69,6 @@ def load_and_sanitize_market_data():
         st.error(f"⚠️ Critical Pipeline Sync Fault: {e}")
         return pd.DataFrame()
 
-def clean_numerical_vector(val):
-    try:
-        return float(str(val).replace("%", "").replace("+", "").replace(",", "").strip())
-    except ValueError:
-        return 0.0
-
-def evaluate_tactical_side(row, ev_limit, diff_limit):
-    away_ev = clean_numerical_vector(row.get("EV Away", 0))
-    home_ev = clean_numerical_vector(row.get("EV Home", 0))
-    away_diff = clean_numerical_vector(row.get("Diff Away", 0))
-    home_diff = clean_numerical_vector(row.get("Diff Home", 0))
-
-    away_valid = away_ev > ev_limit and away_diff >= diff_limit
-    home_valid = home_ev > ev_limit and home_diff >= diff_limit
-
-    if away_valid and (away_ev >= home_ev or not home_valid):
-        return pd.Series([row["Away Team"], "Away", away_ev, away_diff, row["Away Odds"]])
-    if home_valid and (home_ev > away_ev or not away_valid):
-        return pd.Series([row["Home Team"], "Home", home_ev, home_diff, row["Home Odds"]])
-    
-    return pd.Series(["PASS", "Pass", max(away_ev, home_ev), max(away_diff, home_diff), ""])
-
 
 # ============================================================
 # COMPILING WORKSPACE DATASETS
@@ -108,27 +76,18 @@ def evaluate_tactical_side(row, ev_limit, diff_limit):
 base_df = load_and_sanitize_market_data()
 if base_df.empty: st.stop()
 
-# Strip any structural helper spacer lines or total summary rows safely
+# Safely drop empty structural placeholder rows from the sheet
 base_df = base_df[
     (base_df["Home Team"].astype(str).str.strip() != "") & 
     (~base_df["Home Team"].astype(str).str.contains("Unnamed"))
 ].copy().reset_index(drop=True)
 
-# Run Vectorized Engine Mapping dynamically factoring in User's Sidebar Control Knobs
-base_df[["Model Pick", "Pick Side", "Pick EV", "Pick Diff", "Pick Odds"]] = base_df.apply(
-    lambda r: evaluate_tactical_side(r, EV_THRESHOLD, DIFF_THRESHOLD), axis=1
-)
-
-# Apply Tier Grades on the fly
-def assign_tier_grade(row):
-    ev = row["Pick EV"]
-    diff = row["Pick Diff"]
-    if ev >= 20 and diff >= 10: return "Strong Play"
-    if ev >= 10 and diff >= 5: return "Playable"
-    if ev > 5: return "Lean"
-    return "Pass"
-
-base_df["Grade"] = base_df.apply(assign_tier_grade, axis=1)
+# Helper function to convert text strings into clean numbers for coloring/sorting logic
+def clean_numerical_vector(val):
+    try:
+        return float(str(val).replace("%", "").replace("+", "").replace(",", "").strip())
+    except ValueError:
+        return 0.0
 
 
 # ============================================================
@@ -138,6 +97,7 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
     if mode == "totals":
         display_cols = ["Away Team", "Home Team", "O/U", "Over", "% O/U", "Sharps Totals Away"]
     else:
+        # Pulls metrics directly matching your spreadsheet columns
         display_cols = [
             "Away Team", "Home Team", "Away Odds", "Home Odds", "Sharp Away",
             "Sharp Home", "Sharp Dog", "Vegas Win Away", "Vegas Win Home",
@@ -171,8 +131,7 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
         """))
         gb.configure_column("Grade", pinned="right", width=115, cellStyle=JsCode("""
             function(p) {
-                if (p.value === 'Strong Play') return {backgroundColor: '#1E8449', color: '#ffffff', fontWeight: 'bold'};
-                if (p.value === 'Playable') return {backgroundColor: '#2ECC71', color: '#111111'};
+                if (p.value === 'Strong Play' || p.value === 'Playable') return {backgroundColor: '#1E8449', color: '#ffffff', fontWeight: 'bold'};
                 if (p.value === 'Lean') return {backgroundColor: '#F1C40F', color: '#111111'};
                 return {backgroundColor: '#EBEDEF', color: '#7F8C8D'};
             }
@@ -180,7 +139,7 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
 
     ev_format_script = JsCode("""
         function(p) {
-            let v = parseFloat(String(p.value).trim());
+            let v = parseFloat(String(p.value).replace('%','').trim());
             if(isNaN(v)) return {color: '#111111'};
             if(v >= 15) return {backgroundColor: '#2196F3', color: '#ffffff', fontWeight: 'bold'};
             if(v > 0) return {backgroundColor: '#E3F2FD', color: '#0D47A1'};
@@ -213,9 +172,9 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
 st.title("⚾ MLB Quantitative Command Center")
 st.caption("High-velocity computational matrix driving predictive delta analysis.")
 
-# System Diagnostics Row
+# System Diagnostics Row pulled directly from sheet states
 total_active_slate = len(base_df)
-active_execution_plays = base_df[base_df["Model Pick"] != "PASS"]
+active_execution_plays = base_df[(base_df["Model Pick"].astype(str).str.strip() != "") & (base_df["Model Pick"].astype(str).str.upper() != "PASS")]
 sharp_money_nodes = base_df[base_df["Sharp Dog"].astype(str).str.strip() != ""]
 confluence_nodes = base_df[base_df.apply(lambda r: (str(r["Sharp Dog"]).strip() != "" and str(r["Model Pick"]).strip().upper() == str(r["Sharp Dog"]).strip().upper()), axis=1)]
 
@@ -233,12 +192,11 @@ st.markdown("<small>Select any row inside the data grids below to instantly lock
 # 1. RESERVE THE MONITORED BOX GRAPHICAL AREA FIRST
 monitor_anchor = st.empty()
 
-# 2. RENDER INTERACTIVE TAB CORES TO CAPTURE INPUT SELECTIONS BEFORE GRAPHICS ARE COMPILED
+# 2. RENDER INTERACTIVE TAB CORES
 tab_all, tab_ou, tab_premium, tab_sharps, tab_confluence = st.tabs([
     "All Games Matrix", "Over/Under Matrix", "Top System Plays", "Sharp Money Tracker", "System Confluence Signals"
 ])
 
-# Establish concrete tracking variables directly from what's displayed on screen
 runtime_selection = None
 
 with tab_all:
@@ -253,17 +211,19 @@ with tab_ou:
 
 with tab_premium:
     if not active_execution_plays.empty:
-        top_premium = active_execution_plays.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False]).head(5)
+        # Sorts by your sheet's native Pick EV column
+        top_premium = active_execution_plays.copy()
+        top_premium["_sort_ev"] = top_premium["Pick EV"].apply(clean_numerical_vector)
+        top_premium = top_premium.sort_values(by="_sort_ev", ascending=False)
         premium_response = compile_interactive_grid(top_premium, mode="sides", grid_key="premium_grid")
         if premium_response.selected_rows is not None and not premium_response.selected_rows.empty:
             runtime_selection = premium_response.selected_rows.iloc[0].to_dict()
     else:
-        st.info("No formations currently clear execution parameters.")
+        st.info("No active execution plays found directly on the sheet.")
 
 with tab_sharps:
     if not sharp_money_nodes.empty:
-        sharp_sorted = sharp_money_nodes.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
-        sharp_response = compile_interactive_grid(sharp_sorted, mode="sides", grid_key="sharps_grid")
+        sharp_response = compile_interactive_grid(sharp_money_nodes, mode="sides", grid_key="sharps_grid")
         if sharp_response.selected_rows is not None and not sharp_response.selected_rows.empty:
             runtime_selection = sharp_response.selected_rows.iloc[0].to_dict()
     else:
@@ -271,18 +231,17 @@ with tab_sharps:
 
 with tab_confluence:
     if not confluence_nodes.empty:
-        confluence_sorted = confluence_nodes.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
-        conf_response = compile_interactive_grid(confluence_sorted, mode="sides", grid_key="confluence_grid")
+        conf_response = compile_interactive_grid(confluence_nodes, mode="sides", grid_key="confluence_grid")
         if conf_response.selected_rows is not None and not conf_response.selected_rows.empty:
             runtime_selection = conf_response.selected_rows.iloc[0].to_dict()
     else:
         st.info("No structural convergence points detected.")
 
-# 3. IF NO ROW WAS CLICKED YET, FORCE ALIGNMENT WITH THE ACTUAL VISIBLE TOP ROW (Cincinnati vs Philadelphia)
+# Default fallback to index 0 (top row) if no row selection has been actively made yet
 if runtime_selection is None and not base_df.empty:
     runtime_selection = base_df.iloc[0].to_dict()
 
-# 4. BACKFILL THE RESERVED TOP ANCHOR WITH THE ACTIVE USER SELECTED MATRIX NODE
+# 3. BACKFILL RESERVED TELEMETRY BOX WITH SHEET DATA
 if runtime_selection is not None:
     t_away = runtime_selection.get("Away Team", "N/A")
     t_home = runtime_selection.get("Home Team", "N/A")
@@ -290,8 +249,8 @@ if runtime_selection is not None:
     v_win_home = runtime_selection.get("Vegas Win Home", "0%")
     m_win_away = runtime_selection.get("My Win Away", "0%")
     m_win_home = runtime_selection.get("My Win Home", "0%")
-    p_ev = runtime_selection.get("Pick EV", 0.0)
-    p_diff = runtime_selection.get("Pick Diff", 0.0)
+    p_ev = runtime_selection.get("Pick EV", "0.0")
+    p_diff = runtime_selection.get("Pick Diff", "0.0")
     p_pick = runtime_selection.get("Model Pick", "PASS")
     p_grade = runtime_selection.get("Grade", "Pass")
     s_dog = runtime_selection.get("Sharp Dog", "")
@@ -308,7 +267,7 @@ if runtime_selection is not None:
             <tr>
                 <td style="width: 33%;"><b>System Verdict:</b> <span style="color:#1E8449; font-weight:800;">{p_pick} ({p_grade})</span></td>
                 <td style="width: 33%;"><b>Calculated EV Edge:</b> {p_ev}</td>
-                <td style="width: 33%;"><b>Win Split Delta:</b> +{p_diff}%</td>
+                <td style="width: 33%;"><b>Win Split Delta:</b> {p_diff}</td>
             </tr>
             <tr>
                 <td><b>Vegas Implied Projection:</b> A: {v_win_away} | H: {v_win_home}</td>
