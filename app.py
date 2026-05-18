@@ -25,67 +25,38 @@ DIFF_THRESHOLD = 5
 
 
 # ============================================================
-# LOAD & TRANSFORM BLOCKS (TWO-ROW BLOCKS TO SINGLE GAME ROWS)
+# LOAD DATA (FIXED FOR PANDAS COLUMN DUPLICATES)
 # ============================================================
 
 @st.cache_data(ttl=30)
 def load_data():
     try:
-        raw_df = pd.read_csv(URL)
-        # Strip all leading/trailing whitespace from column headers
-        raw_df.columns = [str(c).strip() for c in raw_df.columns]
-        raw_df = raw_df.fillna("")
+        df = pd.read_csv(URL)
+        # Clean any accidental spaces from headers
+        df.columns = [str(c).strip() for c in df.columns]
         
-        # Filter out empty spacer rows
-        if "Away Team" in raw_df.columns:
-            raw_df = raw_df[raw_df["Away Team"].astype(str).str.strip() != ""].reset_index(drop=True)
-        elif "Teams" in raw_df.columns:
-            raw_df = raw_df[raw_df["Teams"].astype(str).str.strip() != ""].reset_index(drop=True)
-            # Rename for uniform consumption if sheet header says 'Teams'
-            raw_df = raw_df.rename(columns={"Teams": "Away Team"})
-            
-        processed_rows = []
+        # Maps the raw duplicate columns Pandas outputs to unique names your app expects
+        rename_map = {
+            "Vegas Odds": "Away Odds",
+            "Vegas Odds.1": "Home Odds",
+            "Sharps ML": "Sharp Away",
+            "Sharps ML.1": "Sharp Home",
+            "Vegas Win%": "Vegas Win Away",
+            "Vegas Win%.1": "Vegas Win Home",
+            "My Win%": "My Win Away",
+            "My Win%.1": "My Win Home",
+            "Differences": "Diff Away",
+            "Differences.1": "Diff Home",
+            "EV": "EV Away",
+            "EV.1": "EV Home",
+            "Sharp": "Sharp Dog",
+            "Sharp Dog": "Sharp Dog"
+        }
+        df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
         
-        # Loop through rows in chunks of 2 (Away row on top, Home row underneath)
-        for i in range(0, len(raw_df), 2):
-            if i + 1 >= len(raw_df):
-                break
-                
-            away_row = raw_df.iloc[i]
-            home_row = raw_df.iloc[i+1]
-            
-            # Dynamic lookups to handle duplicate column headers cleanly
-            vegas_odds_cols = [c for c in raw_df.columns if "Vegas Odds" in c]
-            away_odds_col = vegas_odds_cols[0] if len(vegas_odds_cols) > 0 else "Vegas Odds"
-            home_odds_col = vegas_odds_cols[1] if len(vegas_odds_cols) > 1 else away_odds_col
-
-            my_odds_cols = [c for c in raw_df.columns if "My Odds" in c]
-            away_my_odds = my_odds_cols[0] if len(my_odds_cols) > 0 else "My Odds"
-            home_my_odds = my_odds_cols[1] if len(my_odds_cols) > 1 else away_my_odds
-
-            game_dict = {
-                "Away Team":      away_row["Away Team"],
-                "Home Team":      home_row["Away Team"] if "Home Team" not in raw_df.columns else home_row["Home Team"],
-                "Away Odds":      away_row[away_odds_col] if away_odds_col in raw_df.columns else 0.0,
-                "Home Odds":      home_row[home_odds_col] if home_odds_col in raw_df.columns else 0.0,
-                "Sharp Away":     away_row["Sharps ML"] if "Sharps ML" in raw_df.columns else 0.0,
-                "Sharp Home":     home_row["Sharps ML"] if "Sharps ML" in raw_df.columns else 0.0,
-                "Sharp Dog":      away_row["Sharp"] if "Sharp" in raw_df.columns else (away_row["Sharp Dog"] if "Sharp Dog" in raw_df.columns else ""),
-                "Vegas Win Away": away_row["Vegas Win%"] if "Vegas Win%" in raw_df.columns else 0.0,
-                "Vegas Win Home": home_row["Vegas Win%"] if "Vegas Win%" in raw_df.columns else 0.0,
-                "My Win Away":    away_row["My Win%"] if "My Win%" in raw_df.columns else 0.0,
-                "My Win Home":    home_row["My Win%"] if "My Win%" in raw_df.columns else 0.0,
-                "Diff Away":      away_row["Differences"] if "Differences" in raw_df.columns else 0.0,
-                "Diff Home":      home_row["Differences"] if "Differences" in raw_df.columns else 0.0,
-                "EV Away":        away_row["EV"] if "EV" in raw_df.columns else 0.0,
-                "EV Home":        home_row["EV"] if "EV" in raw_df.columns else 0.0
-            }
-            processed_rows.append(game_dict)
-            
-        return pd.DataFrame(processed_rows)
-        
+        return df.fillna("")
     except Exception as e:
-        st.error(f"Sync/Parser Error: {e}")
+        st.error(f"Sync Error: {e}")
         return pd.DataFrame()
 
 
@@ -115,20 +86,20 @@ def is_dog(odds):
 
 
 def get_pick(row):
-    away_ev = to_num(row["EV Away"])
-    home_ev = to_num(row["EV Home"])
+    away_ev = to_num(row.get("EV Away", 0.0))
+    home_ev = to_num(row.get("EV Home", 0.0))
 
-    away_diff = to_num(row["Diff Away"])
-    home_diff = to_num(row["Diff Home"])
+    away_diff = to_num(row.get("Diff Away", 0.0))
+    home_diff = to_num(row.get("Diff Home", 0.0))
 
     away_play = away_ev > EV_THRESHOLD and away_diff >= DIFF_THRESHOLD
     home_play = home_ev > EV_THRESHOLD and home_diff >= DIFF_THRESHOLD
 
     if away_play and (away_ev >= home_ev or not home_play):
-        return row["Away Team"], "Away", away_ev, away_diff, row["Away Odds"]
+        return row.get("Away Team", "Away"), "Away", away_ev, away_diff, row.get("Away Odds", "")
 
     if home_play and (home_ev > away_ev or not away_play):
-        return row["Home Team"], "Home", home_ev, home_diff, row["Home Odds"]
+        return row.get("Home Team", "Home"), "Home", home_ev, home_diff, row.get("Home Odds", "")
 
     return "PASS", "Pass", max(away_ev, home_ev), max(away_diff, home_diff), ""
 
@@ -194,197 +165,67 @@ def show_grid(df, height=825):
         autoHeight=False,
     )
 
-    # ----------------------------
-    # PINNED COLUMNS
-    # ----------------------------
-
     if "Away Team" in display_df.columns:
-        gb.configure_column(
-            "Away Team",
-            pinned="left",
-            width=130
-        )
+        gb.configure_column("Away Team", pinned="left", width=130)
 
     if "Home Team" in display_df.columns:
-        gb.configure_column(
-            "Home Team",
-            pinned="left",
-            width=130
-        )
+        gb.configure_column("Home Team", pinned="left", width=130)
 
     if "Model Pick" in display_df.columns:
-        gb.configure_column(
-            "Model Pick",
-            pinned="right",
-            width=140
-        )
+        gb.configure_column("Model Pick", pinned="right", width=140)
 
     if "Grade" in display_df.columns:
-        gb.configure_column(
-            "Grade",
-            pinned="right",
-            width=120
-        )
+        gb.configure_column("Grade", pinned="right", width=120)
 
-    # ----------------------------
-    # COLOR STYLES (JS CODE)
-    # ----------------------------
-
+    # COLOR STYLES
     ev_style = JsCode("""
     function(params) {
-        if (params.value >= 20) {
-            return {
-                backgroundColor: '#00a651',
-                color: 'white',
-                fontWeight: 'bold'
-            };
-        }
-
-        if (params.value >= 10) {
-            return {
-                backgroundColor: '#7DCEA0',
-                color: 'black',
-                fontWeight: 'bold'
-            };
-        }
-
-        if (params.value > 0) {
-            return {
-                backgroundColor: '#D5F5E3',
-                color: 'black'
-            };
-        }
-
-        if (params.value < 0) {
-            return {
-                backgroundColor: '#F5B7B1',
-                color: 'black'
-            };
-        }
-
+        if (params.value >= 20) return {backgroundColor: '#00a651', color: 'white', fontWeight: 'bold'};
+        if (params.value >= 10) return {backgroundColor: '#7DCEA0', color: 'black', fontWeight: 'bold'};
+        if (params.value > 0) return {backgroundColor: '#D5F5E3', color: 'black'};
+        if (params.value < 0) return {backgroundColor: '#F5B7B1', color: 'black'};
         return {};
     }
     """)
 
     diff_style = JsCode("""
     function(params) {
-        if (params.value >= 10) {
-            return {
-                backgroundColor: '#58D68D',
-                color: 'white',
-                fontWeight: 'bold'
-            };
-        }
-
-        if (params.value >= 5) {
-            return {
-                backgroundColor: '#F9E79F',
-                color: 'black',
-                fontWeight: 'bold'
-            };
-        }
-
-        if (params.value <= -10) {
-            return {
-                backgroundColor: '#F1948A',
-                color: 'black'
-            };
-        }
-
+        if (params.value >= 10) return {backgroundColor: '#58D68D', color: 'white', fontWeight: 'bold'};
+        if (params.value >= 5) return {backgroundColor: '#F9E79F', color: 'black', fontWeight: 'bold'};
+        if (params.value <= -10) return {backgroundColor: '#F1948A', color: 'black'};
         return {};
     }
     """)
 
     pick_style = JsCode("""
     function(params) {
-        if (params.value === 'PASS') {
-            return {
-                backgroundColor: '#EEEEEE',
-                color: '#666666'
-            };
-        }
-
-        if (params.value) {
-            return {
-                backgroundColor: '#1E8449',
-                color: 'white',
-                fontWeight: 'bold'
-            };
-        }
-
+        if (params.value === 'PASS') return {backgroundColor: '#EEEEEE', color: '#666666'};
+        if (params.value) return {backgroundColor: '#1E8449', color: 'white', fontWeight: 'bold'};
         return {};
     }
     """)
 
     sharp_style = JsCode("""
     function(params) {
-        if (params.value) {
-            return {
-                backgroundColor: '#D6EAF8',
-                color: '#154360',
-                fontWeight: 'bold'
-            };
-        }
-
+        if (params.value) return {backgroundColor: '#D6EAF8', color: '#154360', fontWeight: 'bold'};
         return {};
     }
     """)
 
     grade_style = JsCode("""
     function(params) {
-        if (params.value === 'Strong Play') {
-            return {
-                backgroundColor: '#00a651',
-                color: 'white',
-                fontWeight: 'bold'
-            };
-        }
-
-        if (params.value === 'Playable') {
-            return {
-                backgroundColor: '#A9DFBF',
-                color: 'black',
-                fontWeight: 'bold'
-            };
-        }
-
-        if (params.value === 'Lean') {
-            return {
-                backgroundColor: '#FCF3CF',
-                color: 'black',
-                fontWeight: 'bold'
-            };
-        }
-
-        if (params.value === 'Pass') {
-            return {
-                backgroundColor: '#EEEEEE',
-                color: '#666666'
-            };
-        }
-
+        if (params.value === 'Strong Play') return {backgroundColor: '#00a651', color: 'white', fontWeight: 'bold'};
+        if (params.value === 'Playable') return {backgroundColor: '#A9DFBF', color: 'black', fontWeight: 'bold'};
+        if (params.value === 'Lean') return {backgroundColor: '#FCF3CF', color: 'black', fontWeight: 'bold'};
+        if (params.value === 'Pass') return {backgroundColor: '#EEEEEE', color: '#666666'};
         return {};
     }
     """)
 
     odds_style = JsCode("""
     function(params) {
-        if (params.value > 0) {
-            return {
-                backgroundColor: '#EBF5FB',
-                color: '#154360',
-                fontWeight: 'bold'
-            };
-        }
-
-        if (params.value < 0) {
-            return {
-                backgroundColor: '#FDEDEC',
-                color: '#922B21',
-                fontWeight: 'bold'
-            };
-        }
-
+        if (params.value > 0) return {backgroundColor: '#EBF5FB', color: '#154360', fontWeight: 'bold'};
+        if (params.value < 0) return {backgroundColor: '#FDEDEC', color: '#922B21', fontWeight: 'bold'};
         return {};
     }
     """)
@@ -393,82 +234,37 @@ def show_grid(df, height=825):
     function(params) {
         let pick = params.data["Model Pick"];
         let sharp = params.data["Sharp Dog"];
-
-        if (
-            pick &&
-            sharp &&
-            pick !== "PASS" &&
-            String(pick).trim().toUpperCase() === String(sharp).trim().toUpperCase()
-        ) {
-            return {
-                backgroundColor: '#EEF7FF'
-            };
+        if (pick && sharp && pick !== "PASS" && String(pick).trim().toUpperCase() === String(sharp).trim().toUpperCase()) {
+            return {backgroundColor: '#EEF7FF'};
         }
-
         return {};
     }
     """)
 
-    # ----------------------------
-    # APPLY COLUMN STYLES
-    # ----------------------------
-
     for col in ["EV Away", "EV Home", "Pick EV"]:
         if col in display_df.columns:
-            gb.configure_column(
-                col,
-                width=115,
-                type=["numericColumn"],
-                cellStyle=ev_style
-            )
+            gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=ev_style)
 
     for col in ["Diff Away", "Diff Home", "Pick Diff"]:
         if col in display_df.columns:
-            gb.configure_column(
-                col,
-                width=115,
-                type=["numericColumn"],
-                cellStyle=diff_style
-            )
+            gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=diff_style)
 
     for col in ["Away Odds", "Home Odds", "Pick Odds"]:
         if col in display_df.columns:
-            gb.configure_column(
-                col,
-                width=115,
-                type=["numericColumn"],
-                cellStyle=odds_style
-            )
+            gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=odds_style)
 
     if "Sharp Dog" in display_df.columns:
-        gb.configure_column(
-            "Sharp Dog",
-            width=125,
-            cellStyle=sharp_style
-        )
+        gb.configure_column("Sharp Dog", width=125, cellStyle=sharp_style)
 
     if "Model Pick" in display_df.columns:
-        gb.configure_column(
-            "Model Pick",
-            pinned="right",
-            width=140,
-            cellStyle=pick_style
-        )
+        gb.configure_column("Model Pick", pinned="right", width=140, cellStyle=pick_style)
 
     if "Grade" in display_df.columns:
-        gb.configure_column(
-            "Grade",
-            pinned="right",
-            width=120,
-            cellStyle=grade_style
-        )
+        gb.configure_column("Grade", pinned="right", width=120, cellStyle=grade_style)
 
     for col in ["Sharp Away", "Sharp Home", "Vegas Win Away", "Vegas Win Home", "My Win Away", "My Win Home"]:
         if col in display_df.columns:
-            gb.configure_column(
-                col,
-                width=125
-            )
+            gb.configure_column(col, width=125)
 
     grid_options = gb.build()
     grid_options["getRowStyle"] = signal_row_style
@@ -485,7 +281,7 @@ def show_grid(df, height=825):
 
 
 # ============================================================
-# RUN DATA ANALYSIS PIPELINE
+# EXECUTION & FILTERS
 # ============================================================
 
 df = load_data()
@@ -493,7 +289,11 @@ df = load_data()
 if df.empty:
     st.stop()
 
-# Generate model positions using clean flattened representation
+# Basic spacer filtering using original column handles
+if "Away Team" in df.columns:
+    df = df[df["Away Team"].astype(str).str.strip() != ""].copy().reset_index(drop=True)
+
+# Run original calculations
 picks = df.apply(get_pick, axis=1)
 
 df["Model Pick"] = [p[0] for p in picks]
@@ -502,84 +302,52 @@ df["Pick EV"] = [p[2] for p in picks]
 df["Pick Diff"] = [p[3] for p in picks]
 df["Pick Odds"] = [p[4] for p in picks]
 
-df["Grade"] = df.apply(
-    lambda r: grade_play(r["Pick EV"], r["Pick Diff"]),
-    axis=1
-)
+df["Grade"] = df.apply(lambda r: grade_play(r["Pick EV"], r["Pick Diff"]), axis=1)
 
-
-# ============================================================
-# FILTERS / DATASETS WITH BLANK SAFETY CHECKS
-# ============================================================
-
+# Generate subsets cleanly with empty handling
 model_plays = df[df["Model Pick"] != "PASS"].copy()
 
-# 1. Top Plays Safety Check
+top_plays = pd.DataFrame()
 if not model_plays.empty:
-    top_plays = model_plays.sort_values(
-        by=["Pick EV", "Pick Diff"],
-        ascending=[False, False]
-    ).head(5)
-else:
-    top_plays = pd.DataFrame(columns=df.columns)
+    top_plays = model_plays.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False]).head(5)
 
-# 2. Sharp Dogs Safety Check
-sharp_dogs = df[df["Sharp Dog"].astype(str).str.strip() != ""].copy()
-if not sharp_dogs.empty:
-    sharp_dogs = sharp_dogs.sort_values(
-        by=["Pick EV", "Pick Diff"],
-        ascending=[False, False]
-    )
+sharp_dogs = pd.DataFrame()
+if "Sharp Dog" in df.columns:
+    sharp_dogs = df[df["Sharp Dog"].astype(str).str.strip() != ""].copy()
+    if not sharp_dogs.empty and "Pick EV" in sharp_dogs.columns:
+        sharp_dogs = sharp_dogs.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
 
-# 3. Model Dogs Safety Check
+model_dogs = pd.DataFrame()
 if not model_plays.empty:
-    model_dogs = model_plays[
-        model_plays.apply(lambda r: is_dog(r["Pick Odds"]), axis=1)
-    ].copy()
-    
+    model_dogs = model_plays[model_plays.apply(lambda r: is_dog(r["Pick Odds"]), axis=1)].copy()
     if not model_dogs.empty:
-        model_dogs = model_dogs.sort_values(
-            by=["Pick EV", "Pick Diff"],
-            ascending=[False, False]
-        )
-else:
-    model_dogs = pd.DataFrame(columns=df.columns)
+        model_dogs = model_dogs.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
 
-# 4. Signals Safety Check
-if not model_plays.empty:
+signals = pd.DataFrame()
+if not model_plays.empty and "Sharp Dog" in df.columns:
     signals = model_plays[
         model_plays.apply(
-            lambda r: (
-                str(r["Sharp Dog"]).strip() != ""
-                and normalize(r["Model Pick"]) == normalize(r["Sharp Dog"])
-            ),
+            lambda r: (str(r["Sharp Dog"]).strip() != "" and normalize(r["Model Pick"]) == normalize(r["Sharp Dog"])),
             axis=1
         )
     ].copy()
-    
     if not signals.empty:
-        signals = signals.sort_values(
-            by=["Pick EV", "Pick Diff"],
-            ascending=[False, False]
-        )
-else:
-    signals = pd.DataFrame(columns=df.columns)
+        signals = signals.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
 
 
 # ============================================================
-# DASHBOARD UI
+# DISPLAY HOME
 # ============================================================
 
 st.title("⚾ MLB Command Center")
-st.caption("Flattened single-row data visualization matched perfectly from APP_EXPORT")
+st.caption("Spreadsheet-style betting board powered by APP_EXPORT")
 
 c1, c2, c3, c4, c5 = st.columns(5)
-
-c1.metric("Games Tracking", len(df))
+c1.metric("Games", len(df))
 c2.metric("Model Plays", len(model_plays))
-c3.metric("Sharp Dogs Tracked", len(sharp_dogs))
+c3.metric("Sharp Dogs", len(sharp_dogs))
 c4.metric("Model Dogs", len(model_dogs))
-c5.metric("Aligned Signal Plays", len(signals))
+c5.metric("Signal Plays", len(signals))
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "All Games",
@@ -590,37 +358,33 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 with tab1:
-    st.subheader("All Games Board")
+    st.subheader("All Games")
     show_grid(df, height=850)
 
 with tab2:
-    st.subheader("Top 5 Model Edge Plays")
-
+    st.subheader("Top 5 Model Plays")
     if top_plays.empty:
         st.info("No model plays found.")
     else:
         show_grid(top_plays, height=500)
 
 with tab3:
-    st.subheader("Sharp Dogs Input Track")
-
+    st.subheader("Sharp Dogs Listed In Sheet")
     if sharp_dogs.empty:
-        st.info("No sharp dogs currently identified.")
+        st.info("No sharp dogs listed.")
     else:
         show_grid(sharp_dogs, height=850)
 
 with tab4:
-    st.subheader("Model Underdog Edge Opportunities")
-
+    st.subheader("Model Underdog Plays")
     if model_dogs.empty:
         st.info("No model underdog plays found.")
     else:
         show_grid(model_dogs, height=850)
 
 with tab5:
-    st.subheader("Sharp & Model Convergence Signals")
-
+    st.subheader("Signal Plays")
     if signals.empty:
-        st.info("No sharp/model alignment plays active on this slate.")
+        st.info("No sharp/model alignment plays found.")
     else:
         show_grid(signals, height=850)
