@@ -232,7 +232,7 @@ with tab_all:
     if mid: selected_match_id = mid
 
 with tab_ou:
-    ou_cols = [c for c in ["Away Team", "Home Team", "O/U", "Over", "% O/U", "Sharps Totals Away", "Sharps Totals Home", "_match_id"] if c in base_df.columns]
+    ou_cols = [c for c in ["Away Team", "Home Team", "O/U", "Over", "% O/U", "Sharps Totals Away", "_match_id"] if c in base_df.columns]
     ou_df = base_df[ou_cols].copy() if ou_cols else base_df
     ou_grid_response = compile_interactive_grid(ou_df, mode="totals", grid_key="ou_matrix_grid")
     mid = extract_selected_match_id(ou_grid_response)
@@ -282,7 +282,7 @@ if selected_match_id:
 else:
     runtime_selection = base_df.iloc[0].to_dict() if not base_df.empty else None
 
-# 3. BACKFILL RESERVED TELEMETRY BOX
+# 3. BACKFILL RESERVED TELEMETRY BOX WITH SCRIPT NOTATION NOTES
 if runtime_selection:
     t_away = runtime_selection.get("Away Team", "N/A")
     t_home = runtime_selection.get("Home Team", "N/A")
@@ -336,9 +336,9 @@ if runtime_selection:
             </tr>
         </table>
         <div class="telemetry-note">
-            ℹ️ <b>O/U Telemetry Cheat Sheet:</b><br>
-            • <b>Positive %</b> in App / <b>Green</b> in Sheet: Represents <b>UNDER</b> pressure. The sharps are hammering the under or suppressing the scoring volume.<br>
-            • <b>Negative %</b> in App / <b>White (or Red)</b> in Sheet: Represents <b>OVER</b> pressure. The sharps are backing the over, meaning they are letting the scoring environment expand.
+            ℹ️ <b>O/U Telemetry Interpretation Legend:</b><br>
+            • <b>Positive %</b> in <i>Sharp Totals Delta (Away)</i>: Represents <b>UNDER</b> pressure. The sharps are hammering the under or suppressing the scoring volume.<br>
+            • <b>Negative %</b> in <i>Sharp Totals Delta (Away)</i>: Represents <b>OVER</b> pressure. The sharps are backing the over, meaning they are letting the scoring environment expand.
         </div>
     </div>
     """, unsafe_allow_html=True)
