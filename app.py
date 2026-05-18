@@ -11,7 +11,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Elite Dark/High-Contrast UI Styling Injection
+# Elite UI Styling Injection
 st.markdown("""
     <style>
         .block-container { padding-top: 1.5rem; padding-bottom: 1.5rem; }
@@ -47,6 +47,15 @@ st.markdown("""
             border-radius: 4px;
             padding: 15px;
             margin-bottom: 20px;
+        }
+        
+        /* Telemetry Cheat Sheet Note Block */
+        .telemetry-note {
+            margin-top: 12px;
+            padding-top: 8px;
+            border-top: 1px dashed #BDC3C7;
+            font-size: 12px;
+            color: #566573;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -170,26 +179,18 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
 
 
 # ============================================================
-# EXTRACTION SAFETY CONTROLLER (Fixes Selection Drift)
+# EXTRACTION SAFETY CONTROLLER
 # ============================================================
 def extract_selected_match_id(response):
-    """Safely extracts the match ID regardless of AgGrid state format engine changes."""
     if response is None or response.selected_rows is None:
         return None
-    
-    # Format 1: Response returns a pandas DataFrame directly
     if isinstance(response.selected_rows, pd.DataFrame):
         if not response.selected_rows.empty:
             return response.selected_rows.iloc[0].get("_match_id")
-    
-    # Format 2: Response returns a list of items/dicts
     elif isinstance(response.selected_rows, list) and len(response.selected_rows) > 0:
         row = response.selected_rows[0]
-        if isinstance(row, dict):
+        if isinstance(row, dict) or hasattr(row, "get"):
             return row.get("_match_id")
-        elif hasattr(row, "get"):
-            return row.get("_match_id")
-            
     return None
 
 
@@ -231,7 +232,7 @@ with tab_all:
     if mid: selected_match_id = mid
 
 with tab_ou:
-    ou_cols = [c for c in ["Away Team", "Home Team", "O/U", "Over", "% O/U", "Sharps Totals Away", "_match_id"] if c in base_df.columns]
+    ou_cols = [c for c in ["Away Team", "Home Team", "O/U", "Over", "% O/U", "Sharps Totals Away", "Sharps Totals Home", "_match_id"] if c in base_df.columns]
     ou_df = base_df[ou_cols].copy() if ou_cols else base_df
     ou_grid_response = compile_interactive_grid(ou_df, mode="totals", grid_key="ou_matrix_grid")
     mid = extract_selected_match_id(ou_grid_response)
@@ -274,14 +275,14 @@ with tab_confluence:
     else:
         st.info("No structural convergence points detected.")
 
-# Core Cross-Tab Inversion Controller: Looks up full row parameters via unique match string
+# Core Cross-Tab Inversion Controller
 if selected_match_id:
     matched_rows = base_df[base_df["_match_id"] == selected_match_id]
     runtime_selection = matched_rows.iloc[0].to_dict() if not matched_rows.empty else base_df.iloc[0].to_dict()
 else:
     runtime_selection = base_df.iloc[0].to_dict() if not base_df.empty else None
 
-# 3. BACKFILL RESERVED TELEMETRY BOX WITH ACTUAL SHEET VALUE MATRIX
+# 3. BACKFILL RESERVED TELEMETRY BOX
 if runtime_selection:
     t_away = runtime_selection.get("Away Team", "N/A")
     t_home = runtime_selection.get("Home Team", "N/A")
@@ -334,5 +335,10 @@ if runtime_selection:
                 <td><b>Sharp Totals Delta (Away):</b> {sharp_tot_a}</td>
             </tr>
         </table>
+        <div class="telemetry-note">
+            ℹ️ <b>O/U Telemetry Cheat Sheet:</b><br>
+            • <b>Positive %</b> in App / <b>Green</b> in Sheet: Represents <b>UNDER</b> pressure. The sharps are hammering the under or suppressing the scoring volume.<br>
+            • <b>Negative %</b> in App / <b>White (or Red)</b> in Sheet: Represents <b>OVER</b> pressure. The sharps are backing the over, meaning they are letting the scoring environment expand.
+        </div>
     </div>
     """, unsafe_allow_html=True)
