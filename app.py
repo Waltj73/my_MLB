@@ -76,7 +76,7 @@ def load_and_sanitize_market_data():
 base_df = load_and_sanitize_market_data()
 if base_df.empty: st.stop()
 
-# Safely drop empty structural placeholder rows from the sheet
+# Safely drop empty structural placeholder lines from the sheet
 base_df = base_df[
     (base_df["Home Team"].astype(str).str.strip() != "") & 
     (~base_df["Home Team"].astype(str).str.contains("Unnamed"))
@@ -89,6 +89,13 @@ def clean_numerical_vector(val):
     except ValueError:
         return 0.0
 
+# AUTOMATED COLUMN SIGNATURE DETECTOR (Prevents KeyError crashes)
+PICK_COL = "Model Pick" if "Model Pick" in base_df.columns else "Pick" if "Pick" in base_df.columns else None
+
+if not PICK_COL:
+    st.error("❌ Column Mapping Fault: Could not find a 'Model Pick' or 'Pick' column in your Google Sheet export. Please verify your spreadsheet headers match.")
+    st.stop()
+
 
 # ============================================================
 # HIGH-PERFORMANCE GRID COMPILER ENGINE
@@ -97,12 +104,12 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
     if mode == "totals":
         display_cols = ["Away Team", "Home Team", "O/U", "Over", "% O/U", "Sharps Totals Away"]
     else:
-        # Pulls metrics directly matching your spreadsheet columns
+        # Pulls parameters cleanly mirroring your spreadsheet layout positions
         display_cols = [
             "Away Team", "Home Team", "Away Odds", "Home Odds", "Sharp Away",
             "Sharp Home", "Sharp Dog", "Vegas Win Away", "Vegas Win Home",
             "My Win Away", "My Win Home", "Diff Away", "Diff Home", "EV Away",
-            "EV Home", "Model Pick", "Pick Side", "Pick Odds", "Pick EV",
+            "EV Home", PICK_COL, "Pick Side", "Pick Odds", "Pick EV",
             "Pick Diff", "Grade"
         ]
         
@@ -126,7 +133,7 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
             }
         """))
     else:
-        gb.configure_column("Model Pick", pinned="right", width=130, cellStyle=JsCode("""
+        gb.configure_column(PICK_COL, pinned="right", width=130, cellStyle=JsCode("""
             function(p) { return p.value === 'PASS' ? {backgroundColor: '#EBEDEF', color: '#7F8C8D'} : {backgroundColor: '#27AE60', color: '#ffffff', fontWeight: '900', textAlign: 'center'}; }
         """))
         gb.configure_column("Grade", pinned="right", width=115, cellStyle=JsCode("""
@@ -174,9 +181,9 @@ st.caption("High-velocity computational matrix driving predictive delta analysis
 
 # System Diagnostics Row pulled directly from sheet states
 total_active_slate = len(base_df)
-active_execution_plays = base_df[(base_df["Model Pick"].astype(str).str.strip() != "") & (base_df["Model Pick"].astype(str).str.upper() != "PASS")]
+active_execution_plays = base_df[(base_df[PICK_COL].astype(str).str.strip() != "") & (base_df[PICK_COL].astype(str).str.upper() != "PASS")]
 sharp_money_nodes = base_df[base_df["Sharp Dog"].astype(str).str.strip() != ""]
-confluence_nodes = base_df[base_df.apply(lambda r: (str(r["Sharp Dog"]).strip() != "" and str(r["Model Pick"]).strip().upper() == str(r["Sharp Dog"]).strip().upper()), axis=1)]
+confluence_nodes = base_df[base_df.apply(lambda r: (str(r["Sharp Dog"]).strip() != "" and str(r[PICK_COL]).strip().upper() == str(r["Sharp Dog"]).strip().upper()), axis=1)]
 
 idx_c1, idx_c2, idx_c3, idx_c4 = st.columns(4)
 idx_c1.metric("Slate Volume", total_active_slate)
@@ -211,7 +218,7 @@ with tab_ou:
 
 with tab_premium:
     if not active_execution_plays.empty:
-        # Sorts by your sheet's native Pick EV column
+        # Sorts cleanly based on your sheet's native Pick EV column formatting
         top_premium = active_execution_plays.copy()
         top_premium["_sort_ev"] = top_premium["Pick EV"].apply(clean_numerical_vector)
         top_premium = top_premium.sort_values(by="_sort_ev", ascending=False)
@@ -237,7 +244,7 @@ with tab_confluence:
     else:
         st.info("No structural convergence points detected.")
 
-# Default fallback to index 0 (top row) if no row selection has been actively made yet
+# Default fallback to index 0 (top visible row) if no row selection has been made yet
 if runtime_selection is None and not base_df.empty:
     runtime_selection = base_df.iloc[0].to_dict()
 
@@ -251,7 +258,7 @@ if runtime_selection is not None:
     m_win_home = runtime_selection.get("My Win Home", "0%")
     p_ev = runtime_selection.get("Pick EV", "0.0")
     p_diff = runtime_selection.get("Pick Diff", "0.0")
-    p_pick = runtime_selection.get("Model Pick", "PASS")
+    p_pick = runtime_selection.get(PICK_COL, "PASS")
     p_grade = runtime_selection.get("Grade", "Pass")
     s_dog = runtime_selection.get("Sharp Dog", "")
     
