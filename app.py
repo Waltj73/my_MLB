@@ -179,18 +179,38 @@ def compile_interactive_grid(target_df, mode="sides", grid_key="grid"):
 
 
 # ============================================================
-# EXTRACTION SAFETY CONTROLLER
+# BULLETPROOF DATA ROUTING RUNTIME STATE LISTENER
 # ============================================================
 def extract_selected_match_id(response):
-    if response is None or response.selected_rows is None:
+    if response is None or not hasattr(response, "selected_rows"):
         return None
-    if isinstance(response.selected_rows, pd.DataFrame):
-        if not response.selected_rows.empty:
-            return response.selected_rows.iloc[0].get("_match_id")
-    elif isinstance(response.selected_rows, list) and len(response.selected_rows) > 0:
-        row = response.selected_rows[0]
-        if isinstance(row, dict) or hasattr(row, "get"):
-            return row.get("_match_id")
+    s_rows = response.selected_rows
+    if s_rows is None:
+        return None
+        
+    # Handle dictionary payload structure (AgGrid standard variation)
+    if isinstance(s_rows, dict):
+        if "id" in s_rows or "_match_id" in s_rows:
+            return s_rows.get("_match_id")
+        # Handle structural nested layouts inside dictionary indices
+        for key in s_rows.keys():
+            if isinstance(s_rows[key], list) and len(s_rows[key]) > 0:
+                inner = s_rows[key][0]
+                if isinstance(inner, dict): return inner.get("_match_id")
+                
+    # Handle pure list structural return values
+    if isinstance(s_rows, list) and len(s_rows) > 0:
+        target_item = s_rows[0]
+        if isinstance(target_item, dict):
+            return target_item.get("_match_id")
+        if hasattr(target_item, "get"):
+            return target_item.get("_match_id")
+            
+    # Handle direct Pandas DataFrame serialization outputs
+    if isinstance(s_rows, pd.DataFrame):
+        if not s_rows.empty:
+            return s_rows.iloc[0].get("_match_id")
+            
     return None
 
 
@@ -201,13 +221,13 @@ st.title("⚾ MLB Quantitative Command Center")
 st.caption("High-velocity computational matrix driving predictive delta analysis.")
 
 # System Diagnostics Datasets
-active_execution_plays = base_df[(base_df[PICK_COL].astype(str).str.strip() != "") & (base_df[PICK_COL].astype(str).str.upper() != "PASS")]
+active_execution_triggers = base_df[(base_df[PICK_COL].astype(str).str.strip() != "") & (base_df[PICK_COL].astype(str).str.upper() != "PASS")]
 sharp_money_nodes = base_df[base_df["Sharp Dog"].astype(str).str.strip() != ""] if "Sharp Dog" in base_df.columns else pd.DataFrame()
 confluence_nodes = base_df[base_df.apply(lambda r: (str(r.get("Sharp Dog", "")).strip() != "" and str(r[PICK_COL]).strip().upper() == str(r.get("Sharp Dog", "")).strip().upper()), axis=1)] if "Sharp Dog" in base_df.columns else pd.DataFrame()
 
 idx_c1, idx_c2, idx_c3, idx_c4 = st.columns(4)
 idx_c1.metric("Slate Volume", len(base_df))
-idx_c2.metric("Execution Triggers", len(active_execution_plays))
+idx_c2.metric("Execution Triggers", len(active_execution_triggers))
 idx_c3.metric("Sharp Monitored Assets", len(sharp_money_nodes))
 idx_c4.metric("Systemic Confluences", len(confluence_nodes))
 
@@ -239,8 +259,8 @@ with tab_ou:
     if mid: selected_match_id = mid
 
 with tab_premium:
-    if not active_execution_plays.empty:
-        top_premium = active_execution_plays.copy()
+    if not active_execution_triggers.empty:
+        top_premium = active_execution_triggers.copy()
         
         def resolve_directional_ev(row):
             pick_string = str(row[PICK_COL]).strip().upper()
@@ -282,7 +302,7 @@ if selected_match_id:
 else:
     runtime_selection = base_df.iloc[0].to_dict() if not base_df.empty else None
 
-# 3. BACKFILL RESERVED TELEMETRY BOX WITH SCRIPT NOTATION NOTES
+# 3. BACKFILL RESERVED TELEMETRY BOX
 if runtime_selection:
     t_away = runtime_selection.get("Away Team", "N/A")
     t_home = runtime_selection.get("Home Team", "N/A")
@@ -336,7 +356,7 @@ if runtime_selection:
             </tr>
         </table>
         <div class="telemetry-note">
-            ℹ️ <b>O/U Telemetry Interpretation Legend:</b><br>
+            ℹ️ <b>i O/U Telemetry Interpretation Legend:</b><br>
             • <b>Positive %</b> in <i>Sharp Totals Delta (Away)</i>: Represents <b>UNDER</b> pressure. The sharps are hammering the under or suppressing the scoring volume.<br>
             • <b>Negative %</b> in <i>Sharp Totals Delta (Away)</i>: Represents <b>OVER</b> pressure. The sharps are backing the over, meaning they are letting the scoring environment expand.
         </div>
