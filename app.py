@@ -509,42 +509,61 @@ df["Grade"] = df.apply(
 
 
 # ============================================================
-# FILTERS / DATASETS
+# FILTERS / DATASETS WITH BLANK SAFETY CHECKS
 # ============================================================
 
 model_plays = df[df["Model Pick"] != "PASS"].copy()
 
-top_plays = model_plays.sort_values(
-    by=["Pick EV", "Pick Diff"],
-    ascending=[False, False]
-).head(5)
+# 1. Top Plays Safety Check
+if not model_plays.empty:
+    top_plays = model_plays.sort_values(
+        by=["Pick EV", "Pick Diff"],
+        ascending=[False, False]
+    ).head(5)
+else:
+    top_plays = pd.DataFrame(columns=df.columns)
 
-sharp_dogs = df[
-    df["Sharp Dog"].astype(str).str.strip() != ""
-].copy().sort_values(
-    by=["Pick EV", "Pick Diff"],
-    ascending=[False, False]
-)
-
-model_dogs = model_plays[
-    model_plays.apply(lambda r: is_dog(r["Pick Odds"]), axis=1)
-].copy().sort_values(
-    by=["Pick EV", "Pick Diff"],
-    ascending=[False, False]
-)
-
-signals = model_plays[
-    model_plays.apply(
-        lambda r: (
-            str(r["Sharp Dog"]).strip() != ""
-            and normalize(r["Model Pick"]) == normalize(r["Sharp Dog"])
-        ),
-        axis=1
+# 2. Sharp Dogs Safety Check
+sharp_dogs = df[df["Sharp Dog"].astype(str).str.strip() != ""].copy()
+if not sharp_dogs.empty:
+    sharp_dogs = sharp_dogs.sort_values(
+        by=["Pick EV", "Pick Diff"],
+        ascending=[False, False]
     )
-].copy().sort_values(
-    by=["Pick EV", "Pick Diff"],
-    ascending=[False, False]
-)
+
+# 3. Model Dogs Safety Check
+if not model_plays.empty:
+    model_dogs = model_plays[
+        model_plays.apply(lambda r: is_dog(r["Pick Odds"]), axis=1)
+    ].copy()
+    
+    if not model_dogs.empty:
+        model_dogs = model_dogs.sort_values(
+            by=["Pick EV", "Pick Diff"],
+            ascending=[False, False]
+        )
+else:
+    model_dogs = pd.DataFrame(columns=df.columns)
+
+# 4. Signals Safety Check
+if not model_plays.empty:
+    signals = model_plays[
+        model_plays.apply(
+            lambda r: (
+                str(r["Sharp Dog"]).strip() != ""
+                and normalize(r["Model Pick"]) == normalize(r["Sharp Dog"])
+            ),
+            axis=1
+        )
+    ].copy()
+    
+    if not signals.empty:
+        signals = signals.sort_values(
+            by=["Pick EV", "Pick Diff"],
+            ascending=[False, False]
+        )
+else:
+    signals = pd.DataFrame(columns=df.columns)
 
 
 # ============================================================
