@@ -20,43 +20,94 @@ SHEET_NAME = "APP_EXPORT"
 
 URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}"
 
-EV_THRESHOLD = 5
-DIFF_THRESHOLD = 5
-
 
 # ============================================================
-# LOAD DATA (FIXED FOR PANDAS COLUMN DUPLICATES)
+# LOAD DATA (ONE ROW PER GAME EXTRACTED FROM TWO-ROW SHEET)
 # ============================================================
 
 @st.cache_data(ttl=30)
 def load_data():
     try:
-        df = pd.read_csv(URL)
-        # Clean any accidental spaces from headers
-        df.columns = [str(c).strip() for c in df.columns]
+        raw_df = pd.read_csv(URL)
+        raw_df.columns = [str(c).strip() for c in raw_df.columns]
+        raw_df = raw_df.fillna("")
         
-        # Maps the raw duplicate columns Pandas outputs to unique names your app expects
-        rename_map = {
-            "Vegas Odds": "Away Odds",
-            "Vegas Odds.1": "Home Odds",
-            "Sharps ML": "Sharp Away",
-            "Sharps ML.1": "Sharp Home",
-            "Vegas Win%": "Vegas Win Away",
-            "Vegas Win%.1": "Vegas Win Home",
-            "My Win%": "My Win Away",
-            "My Win%.1": "My Win Home",
-            "Differences": "Diff Away",
-            "Differences.1": "Diff Home",
-            "EV": "EV Away",
-            "EV.1": "EV Home",
-            "Sharp": "Sharp Dog",
-            "Sharp Dog": "Sharp Dog"
-        }
-        df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+        # Determine the primary team column header
+        team_col = "Away Team" if "Away Team" in raw_df.columns else ("Teams" if "Teams" in raw_df.columns else "")
+        if not team_col:
+            return pd.DataFrame()
+            
+        # Filter out empty formatting lines
+        raw_df = raw_df[raw_df[team_col].astype(str).str.strip() != ""].reset_index(drop=True)
+            
+        processed_rows = []
         
-        return df.fillna("")
+        # Iterate in pairs: row i is Away, row i+1 is Home
+        for i in range(0, len(raw_df), 2):
+            if i + 1 >= len(raw_df):
+                break
+                
+            away_row = raw_df.iloc[i]
+            home_row = raw_df.iloc[i+1]
+            
+            # Handle pandas duplicate column suffix naming (.1)
+            vegas_odds_away = away_row.get("Vegas Odds", 0)
+            vegas_odds_home = home_row.get("Vegas Odds.1", home_row.get("Vegas Odds", 0))
+
+            my_odds_away = away_row.get("My Odds", 0)
+            my_odds_home = home_row.get("My Odds.1", home_row.get("My Odds", 0))
+
+            sharp_ml_away = away_row.get("Sharps ML", 0)
+            sharp_ml_home = home_row.get("Sharps ML.1", home_row.get("Sharps ML", 0))
+
+            vegas_win_away = away_row.get("Vegas Win%", 0)
+            vegas_win_home = home_row.get("Vegas Win%.1", home_row.get("Vegas Win%", 0))
+
+            my_win_away = away_row.get("My Win%", 0)
+            my_win_home = home_row.get("My Win%.1", home_row.get("My Win%", 0))
+
+            diff_away = away_row.get("Differences", 0)
+            diff_home = home_row.get("Differences.1", home_row.get("Differences", 0))
+
+            ev_away = away_row.get("EV", 0)
+            ev_home = home_row.get("EV.1", home_row.get("EV", 0))
+
+            pick_away = away_row.get("Picks", "")
+            pick_home = home_row.get("Picks.1", home_row.get("Picks", ""))
+            
+            # Determine the active model pick from columns Y and Z
+            model_pick = "PASS"
+            if str(pick_away).strip() != "":
+                model_pick = str(pick_away).strip()
+            elif str(pick_home).strip() != "":
+                model_pick = str(pick_home).strip()
+
+            game_dict = {
+                "Away Team":      away_row[team_col],
+                "Home Team":      home_row[team_col],
+                "Away Odds":      vegas_odds_away,
+                "Home Odds":      vegas_odds_home,
+                "My Odds Away":   my_odds_away,
+                "My Odds Home":   my_odds_home,
+                "Sharp Away":     sharp_ml_away,
+                "Sharp Home":     sharp_ml_home,
+                "Sharp Dog":      away_row.get("Sharp Dogs", away_row.get("Sharp", "")),
+                "Vegas Win Away": vegas_win_away,
+                "Vegas Win Home": vegas_win_home,
+                "My Win Away":    my_win_away,
+                "My Win Home":    my_win_home,
+                "Diff Away":      diff_away,
+                "Diff Home":      diff_home,
+                "EV Away":        ev_away,
+                "EV Home":        ev_home,
+                "Model Pick":     model_pick
+            }
+            processed_rows.append(game_dict)
+            
+        return pd.DataFrame(processed_rows)
+        
     except Exception as e:
-        st.error(f"Sync Error: {e}")
+        st.error(f"Sync Parser Error: {e}")
         return pd.DataFrame()
 
 
@@ -85,37 +136,21 @@ def is_dog(odds):
     return to_num(odds) > 0
 
 
-def get_pick(row):
-    away_ev = to_num(row.get("EV Away", 0.0))
-    home_ev = to_num(row.get("EV Home", 0.0))
-
-    away_diff = to_num(row.get("Diff Away", 0.0))
-    home_diff = to_num(row.get("Diff Home", 0.0))
-
-    away_play = away_ev > EV_THRESHOLD and away_diff >= DIFF_THRESHOLD
-    home_play = home_ev > EV_THRESHOLD and home_diff >= DIFF_THRESHOLD
-
-    if away_play and (away_ev >= home_ev or not home_play):
-        return row.get("Away Team", "Away"), "Away", away_ev, away_diff, row.get("Away Odds", "")
-
-    if home_play and (home_ev > away_ev or not away_play):
-        return row.get("Home Team", "Home"), "Home", home_ev, home_diff, row.get("Home Odds", "")
-
-    return "PASS", "Pass", max(away_ev, home_ev), max(away_diff, home_diff), ""
-
-
-def grade_play(ev, diff):
-    ev = to_num(ev)
-    diff = to_num(diff)
-
+def grade_play(pick, df_row):
+    if str(pick).upper() == "PASS":
+        return "Lean"
+        
+    # Read calculations directly mapped from the spreadsheet values
+    if normalize(pick) == normalize(df_row["Away Team"]):
+        ev = to_num(df_row["EV Away"])
+        diff = to_num(df_row["Diff Away"])
+    else:
+        ev = to_num(df_row["EV Home"])
+        diff = to_num(df_row["Diff Home"])
+        
     if ev >= 20 and diff >= 10:
         return "Strong Play"
-    if ev >= 10 and diff >= 5:
-        return "Playable"
-    if ev > 5:
-        return "Lean"
-
-    return "Pass"
+    return "Playable"
 
 
 def prepare_display(df):
@@ -134,21 +169,15 @@ def prepare_display(df):
         "Diff Away",
         "Diff Home",
         "EV Away",
-        "EV Home",
         "Model Pick",
-        "Pick Side",
-        "Pick Odds",
-        "Pick EV",
-        "Pick Diff",
         "Grade",
     ]
-
     cols = [c for c in cols if c in df.columns]
     return df[cols].copy()
 
 
 # ============================================================
-# AGGRID TABLE WITH COLOR CODING
+# AGGRID DISPLAY COMPONENT
 # ============================================================
 
 def show_grid(df, height=825):
@@ -177,7 +206,7 @@ def show_grid(df, height=825):
     if "Grade" in display_df.columns:
         gb.configure_column("Grade", pinned="right", width=120)
 
-    # COLOR STYLES
+    # REPLICATED DESIGN STYLING PATTERNS
     ev_style = JsCode("""
     function(params) {
         if (params.value >= 20) return {backgroundColor: '#00a651', color: 'white', fontWeight: 'bold'};
@@ -217,7 +246,6 @@ def show_grid(df, height=825):
         if (params.value === 'Strong Play') return {backgroundColor: '#00a651', color: 'white', fontWeight: 'bold'};
         if (params.value === 'Playable') return {backgroundColor: '#A9DFBF', color: 'black', fontWeight: 'bold'};
         if (params.value === 'Lean') return {backgroundColor: '#FCF3CF', color: 'black', fontWeight: 'bold'};
-        if (params.value === 'Pass') return {backgroundColor: '#EEEEEE', color: '#666666'};
         return {};
     }
     """)
@@ -241,15 +269,15 @@ def show_grid(df, height=825):
     }
     """)
 
-    for col in ["EV Away", "EV Home", "Pick EV"]:
+    for col in ["EV Away", "EV Home"]:
         if col in display_df.columns:
             gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=ev_style)
 
-    for col in ["Diff Away", "Diff Home", "Pick Diff"]:
+    for col in ["Diff Away", "Diff Home"]:
         if col in display_df.columns:
             gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=diff_style)
 
-    for col in ["Away Odds", "Home Odds", "Pick Odds"]:
+    for col in ["Away Odds", "Home Odds"]:
         if col in display_df.columns:
             gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=odds_style)
 
@@ -261,10 +289,6 @@ def show_grid(df, height=825):
 
     if "Grade" in display_df.columns:
         gb.configure_column("Grade", pinned="right", width=120, cellStyle=grade_style)
-
-    for col in ["Sharp Away", "Sharp Home", "Vegas Win Away", "Vegas Win Home", "My Win Away", "My Win Home"]:
-        if col in display_df.columns:
-            gb.configure_column(col, width=125)
 
     grid_options = gb.build()
     grid_options["getRowStyle"] = signal_row_style
@@ -281,7 +305,7 @@ def show_grid(df, height=825):
 
 
 # ============================================================
-# EXECUTION & FILTERS
+# EXECUTION PIPELINE
 # ============================================================
 
 df = load_data()
@@ -289,39 +313,27 @@ df = load_data()
 if df.empty:
     st.stop()
 
-# Basic spacer filtering using original column handles
-if "Away Team" in df.columns:
-    df = df[df["Away Team"].astype(str).str.strip() != ""].copy().reset_index(drop=True)
+# Assign grades dynamically matching the sheet criteria row calculations
+df["Grade"] = df.apply(lambda r: grade_play(r["Model Pick"], r), axis=1)
 
-# Run original calculations
-picks = df.apply(get_pick, axis=1)
-
-df["Model Pick"] = [p[0] for p in picks]
-df["Pick Side"] = [p[1] for p in picks]
-df["Pick EV"] = [p[2] for p in picks]
-df["Pick Diff"] = [p[3] for p in picks]
-df["Pick Odds"] = [p[4] for p in picks]
-
-df["Grade"] = df.apply(lambda r: grade_play(r["Pick EV"], r["Pick Diff"]), axis=1)
-
-# Generate subsets cleanly with empty handling
+# Generate exact operational tracking views
 model_plays = df[df["Model Pick"] != "PASS"].copy()
 
 top_plays = pd.DataFrame()
 if not model_plays.empty:
-    top_plays = model_plays.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False]).head(5)
+    top_plays = model_plays.sort_values(by=["Grade", "Away Team"], ascending=[False, True]).head(5)
 
 sharp_dogs = pd.DataFrame()
 if "Sharp Dog" in df.columns:
     sharp_dogs = df[df["Sharp Dog"].astype(str).str.strip() != ""].copy()
-    if not sharp_dogs.empty and "Pick EV" in sharp_dogs.columns:
-        sharp_dogs = sharp_dogs.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
 
 model_dogs = pd.DataFrame()
 if not model_plays.empty:
-    model_dogs = model_plays[model_plays.apply(lambda r: is_dog(r["Pick Odds"]), axis=1)].copy()
-    if not model_dogs.empty:
-        model_dogs = model_dogs.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
+    def check_dog_pick(r):
+        is_away = normalize(r["Model Pick"]) == normalize(r["Away Team"])
+        odds_val = r["Away Odds"] if is_away else r["Home Odds"]
+        return is_dog(odds_val)
+    model_dogs = model_plays[model_plays.apply(check_dog_pick, axis=1)].copy()
 
 signals = pd.DataFrame()
 if not model_plays.empty and "Sharp Dog" in df.columns:
@@ -331,19 +343,17 @@ if not model_plays.empty and "Sharp Dog" in df.columns:
             axis=1
         )
     ].copy()
-    if not signals.empty:
-        signals = signals.sort_values(by=["Pick EV", "Pick Diff"], ascending=[False, False])
 
 
 # ============================================================
-# DISPLAY HOME
+# LAYOUT RENDERING
 # ============================================================
 
 st.title("⚾ MLB Command Center")
-st.caption("Spreadsheet-style betting board powered by APP_EXPORT")
+st.caption("Synchronized single-row analytics board matching spreadsheet logic.")
 
 c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Games", len(df))
+c1.metric("Games Tracked", len(df))
 c2.metric("Model Plays", len(model_plays))
 c3.metric("Sharp Dogs", len(sharp_dogs))
 c4.metric("Model Dogs", len(model_dogs))
@@ -358,33 +368,33 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 with tab1:
-    st.subheader("All Games")
+    st.subheader("All Games Master Board")
     show_grid(df, height=850)
 
 with tab2:
-    st.subheader("Top 5 Model Plays")
+    st.subheader("Top Model Edge Opportunities")
     if top_plays.empty:
-        st.info("No model plays found.")
+        st.info("No active edge targets identified.")
     else:
         show_grid(top_plays, height=500)
 
 with tab3:
-    st.subheader("Sharp Dogs Listed In Sheet")
+    st.subheader("Sharp Dogs Input Track")
     if sharp_dogs.empty:
-        st.info("No sharp dogs listed.")
+        st.info("No sharp dogs currently marked.")
     else:
         show_grid(sharp_dogs, height=850)
 
 with tab4:
-    st.subheader("Model Underdog Plays")
+    st.subheader("Model Underdog Selections")
     if model_dogs.empty:
-        st.info("No model underdog plays found.")
+        st.info("No plus-money positions found.")
     else:
         show_grid(model_dogs, height=850)
 
 with tab5:
-    st.subheader("Signal Plays")
+    st.subheader("Convergence Signals")
     if signals.empty:
-        st.info("No sharp/model alignment plays found.")
+        st.info("No system-aligned positions found.")
     else:
         show_grid(signals, height=850)
