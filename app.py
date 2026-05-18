@@ -12,23 +12,23 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Force a clean dark theme container for the Streamlit background
+# Force high-contrast structural text rules globally across the app container
 st.markdown("""
     <style>
         .block-container { padding-top: 2rem; padding-bottom: 2rem; }
-        h1 { font-weight: 800 !important; color: #FFFFFF !important; letter-spacing: -1px; }
+        h1 { font-weight: 800 !important; color: #111111 !important; letter-spacing: -1px; }
         .stTabs [data-baseweb="tab-list"] { gap: 8px; }
         .stTabs [data-baseweb="tab"] {
-            background-color: #1e1e24;
+            background-color: #f0f2f6;
             border-radius: 6px 6px 0px 0px;
             padding: 10px 20px;
-            color: #afb1b6;
+            color: #444444;
             font-weight: 600;
         }
         .stTabs [aria-selected="true"] {
-            background-color: #2d3139 !important;
-            color: #00ff66 !important;
-            border-bottom: 2px solid #00ff66 !important;
+            background-color: #ffffff !important;
+            color: #1e8449 !important;
+            border-bottom: 2px solid #1e8449 !important;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -122,7 +122,7 @@ def prepare_display(df):
 
 
 # ============================================================
-# MODERNIZED DARK AGGRID BOARD
+# HIGH-CONTRAST AGGRID APP BOARD
 # ============================================================
 
 def show_grid(df, height=825):
@@ -130,7 +130,7 @@ def show_grid(df, height=825):
 
     gb = GridOptionsBuilder.from_dataframe(display_df)
 
-    # Global UI Overhaul
+    # Base grid layouts
     gb.configure_default_column(
         resizable=True,
         sortable=True,
@@ -140,78 +140,83 @@ def show_grid(df, height=825):
         autoHeight=False,
     )
 
-    # Layout Spacing Controls
     gb.configure_grid_options(
         rowHeight=42,
         headerHeight=48,
         rowSelection="single"
     )
 
-    # Pinned Navigation Pillars
+    # --------------------------------------------------------
+    # STRICT HIGH-CONTRAST JAVASCRIPT STYLE BLOCKS
+    # --------------------------------------------------------
+    # Explicitly locks color to '#111111' or '#ffffff' for visibility
+
+    base_text_style = {"color": "#111111", "fontWeight": "600"}
+    team_text_style = {"color": "#111111", "fontWeight": "800"}
+
     if "Away Team" in display_df.columns:
-        gb.configure_column("Away Team", pinned="left", width=140, cellStyle={"fontWeight": "700", "color": "#FFFFFF"})
+        gb.configure_column("Away Team", pinned="left", width=140, cellStyle=team_text_style)
 
     if "Home Team" in display_df.columns:
-        gb.configure_column("Home Team", pinned="left", width=140, cellStyle={"fontWeight": "700", "color": "#FFFFFF"})
+        gb.configure_column("Home Team", pinned="left", width=140, cellStyle=team_text_style)
 
-    # Pro-Grade Dark Color Mappings (Glow effects rather than flat solids)
     ev_style = JsCode("""
     function(params) {
         let val = parseFloat(String(params.value).replace('%','').trim());
-        if (isNaN(val)) return {};
-        if (val >= 20) return {backgroundColor: 'rgba(0, 166, 81, 0.25)', color: '#00ff66', fontWeight: 'bold'};
-        if (val >= 10) return {backgroundColor: 'rgba(125, 206, 160, 0.15)', color: '#7DCEA0'};
-        if (val > 0) return {backgroundColor: 'rgba(213, 245, 227, 0.05)', color: '#D5F5E3'};
-        if (val < 0) return {backgroundColor: 'rgba(245, 183, 177, 0.08)', color: '#F5B7B1'};
-        return {};
+        if (isNaN(val)) return {color: '#111111'};
+        if (val >= 20) return {backgroundColor: '#00a651', color: '#ffffff', fontWeight: 'bold'};
+        if (val >= 10) return {backgroundColor: '#7DCEA0', color: '#111111', fontWeight: 'bold'};
+        if (val > 0) return {backgroundColor: '#D5F5E3', color: '#111111'};
+        if (val < 0) return {backgroundColor: '#F5B7B1', color: '#111111'};
+        return {color: '#111111'};
     }
     """)
 
     diff_style = JsCode("""
     function(params) {
         let val = parseFloat(String(params.value).replace('%','').trim());
-        if (isNaN(val)) return {};
-        if (val >= 10) return {backgroundColor: 'rgba(88, 214, 141, 0.25)', color: '#58D68D', fontWeight: 'bold'};
-        if (val >= 5) return {backgroundColor: 'rgba(249, 231, 159, 0.15)', color: '#F9E79F', fontWeight: 'bold'};
-        if (val <= -10) return {backgroundColor: 'rgba(241, 148, 138, 0.12)', color: '#F1948A'};
-        return {};
+        if (isNaN(val)) return {color: '#111111'};
+        if (val >= 10) return {backgroundColor: '#58D68D', color: '#ffffff', fontWeight: 'bold'};
+        if (val >= 5) return {backgroundColor: '#F9E79F', color: '#111111', fontWeight: 'bold'};
+        if (val <= -10) return {backgroundColor: '#F1948A', color: '#111111'};
+        return {color: '#111111'};
     }
     """)
 
     pick_style = JsCode("""
     function(params) {
-        if (params.value === 'PASS') return {backgroundColor: 'rgba(255,255,255,0.04)', color: '#71747c'};
+        if (params.value === 'PASS') return {backgroundColor: '#EEEEEE', color: '#666666'};
         if (params.value) return {backgroundColor: '#1E8449', color: '#ffffff', fontWeight: '900', textAlign: 'center'};
-        return {};
+        return {color: '#111111'};
     }
     """)
 
     sharp_style = JsCode("""
     function(params) {
         if (params.value && String(params.value).trim() !== '') {
-            return {backgroundColor: 'rgba(52, 152, 219, 0.2)', color: '#5dade2', fontWeight: 'bold', border: '1px solid #3498db'};
+            return {backgroundColor: '#D6EAF8', color: '#154360', fontWeight: 'bold'};
         }
-        return {};
+        return {color: '#111111'};
     }
     """)
 
     grade_style = JsCode("""
     function(params) {
-        if (params.value === 'Strong Play') return {color: '#00ff66', fontWeight: '900', backgroundColor: 'rgba(0, 166, 81, 0.1)'};
-        if (params.value === 'Playable') return {color: '#7DCEA0', fontWeight: 'bold'};
-        if (params.value === 'Lean') return {color: '#F9E79F'};
-        if (params.value === 'Pass') return {color: '#71747c'};
-        return {};
+        if (params.value === 'Strong Play') return {backgroundColor: '#00a651', color: '#ffffff', fontWeight: '900'};
+        if (params.value === 'Playable') return {backgroundColor: '#A9DFBF', color: '#111111', fontWeight: 'bold'};
+        if (params.value === 'Lean') return {backgroundColor: '#FCF3CF', color: '#111111', fontWeight: 'bold'};
+        if (params.value === 'Pass') return {backgroundColor: '#EEEEEE', color: '#666666'};
+        return {color: '#111111'};
     }
     """)
 
     odds_style = JsCode("""
     function(params) {
         let val = parseFloat(String(params.value).replace('+','').trim());
-        if (isNaN(val)) return {};
-        if (val > 0) return {color: '#3498db', fontWeight: 'bold', backgroundColor: 'rgba(52, 152, 219, 0.05)'};
-        if (val < 0) return {color: '#e74c3c', fontWeight: 'bold', backgroundColor: 'rgba(231, 76, 60, 0.05)'};
-        return {};
+        if (isNaN(val)) return {color: '#111111'};
+        if (val > 0) return {backgroundColor: '#EBF5FB', color: '#154360', fontWeight: 'bold'};
+        if (val < 0) return {backgroundColor: '#FDEDEC', color: '#922B21', fontWeight: 'bold'};
+        return {color: '#111111'};
     }
     """)
 
@@ -220,13 +225,13 @@ def show_grid(df, height=825):
         let pick = params.data["Model Pick"];
         let sharp = params.data["Sharp Dog"];
         if (pick && sharp && pick !== "PASS" && String(pick).trim().toUpperCase() === String(sharp).trim().toUpperCase()) {
-            return {backgroundColor: '#1c2833', borderLeft: '4px solid #3498db'};
+            return {backgroundColor: '#EEF7FF'};
         }
         return {};
     }
     """)
 
-    # Apply style assignments
+    # Map validation targets with dark high-visibility text rules
     for col in ["EV Away", "EV Home", "Pick EV"]:
         if col in display_df.columns: gb.configure_column(col, width=115, type=["numericColumn"], cellStyle=ev_style)
 
@@ -241,7 +246,7 @@ def show_grid(df, height=825):
     if "Grade" in display_df.columns: gb.configure_column("Grade", pinned="right", width=120, cellStyle=grade_style)
 
     for col in ["Sharp Away", "Sharp Home", "Vegas Win Away", "Vegas Win Home", "My Win Away", "My Win Home"]:
-        if col in display_df.columns: gb.configure_column(col, width=125, cellStyle={"color": "#cccccc"})
+        if col in display_df.columns: gb.configure_column(col, width=125, cellStyle=base_text_style)
 
     grid_options = gb.build()
     grid_options["getRowStyle"] = signal_row_style
@@ -252,7 +257,7 @@ def show_grid(df, height=825):
         height=height,
         fit_columns_on_grid_load=False,
         allow_unsafe_jscode=True,
-        theme="alpine-dark",  # Clean, modern charcoal/black framework
+        theme="balham",  # Reverted to clean light matrix sheet to guarantee contrast visibility
         enable_enterprise_modules=False,
     )
 
@@ -331,7 +336,6 @@ if not model_plays.empty:
 st.title("⚾ MLB Command Center")
 st.caption("Spreadsheet-style betting board powered by APP_EXPORT")
 
-# Metric Panel Styles
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Games On Board", len(df))
 c2.metric("Active Model Plays", len(model_plays))
@@ -339,7 +343,6 @@ c3.metric("Tracked Sharp Dogs", len(sharp_dogs))
 c4.metric("Model Underdogs", len(model_dogs))
 c5.metric("System Confluence Signals", len(signals))
 
-# Master Tabs Layout
 tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📖 How to Read", "All Games", "Top 5 Plays", "Sharp Dogs", "Model Dogs", "Signal Plays"
 ])
